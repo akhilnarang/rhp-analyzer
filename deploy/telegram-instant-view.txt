@@ -1,11 +1,15 @@
 ~version: "2.1"
 
 # Generate Instant View only for a completed analysis page.
-?path: /analysis/[0-9a-f]{64}
+?path: /analysis/[a-z0-9][a-z0-9-]*
 ?exists: //section[@data-instant-view="article"]
 
 title: //section[@data-instant-view="article"]/header/h1
+subtitle: //section[@data-instant-view="article"]/header/p
 description: //section[@data-instant-view="article"]/header/p
 published_date: //section[@data-instant-view="article"]/header/time/@datetime
 site_name: "RHP Analyzer"
+
+# Telegram renders the semantic headings, lists, tables, anchors, and dividers
+# in this article body. The web-only table of contents stays outside it.
 body: //section[@data-instant-view="article"]/article[@itemprop="articleBody"]

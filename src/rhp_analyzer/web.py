@@ -30,7 +30,8 @@ def analysis_title(job: dict[str, Any]) -> str:
         return str(job["filename"])
     title = match.group(1).strip().strip("*_`")
     title = re.sub(
-        r"\s+[—–-]\s+(?:(?:RHP|DRHP|IPO)\s+)?(?:research\s+)?(?:report|analysis).*$",
+        r"\s+(?:[—–-]\s+)?(?:(?:RHP|DRHP|IPO)\s+)?"
+        r"(?:research\s+)?(?:report|analysis)\s*$",
         "",
         title,
         flags=re.IGNORECASE,

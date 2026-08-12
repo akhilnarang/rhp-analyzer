@@ -557,7 +557,7 @@ class ApiTests(TestCase):
         job = {
             "filename": "Registration_21072025200223_MeridianDRHP.pdf",
             "report_markdown": (
-                "# Milky Mist Dairy Food Limited — DRHP Research Report\n\n"
+                "# Milky Mist Dairy Food Limited IPO Research Report\n\n"
                 "## Executive Summary"
             ),
         }
