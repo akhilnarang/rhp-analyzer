@@ -1,0 +1,19 @@
+[Unit]
+Description=RHP Analyzer
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ubuntu/rhp-analyzer
+EnvironmentFile=/home/ubuntu/rhp-analyzer/.env
+Environment=PYTHONUNBUFFERED=1
+UMask=0007
+ExecStart=/home/ubuntu/rhp-analyzer/.venv/bin/uvicorn rhp_analyzer.api:app --uds /home/ubuntu/rhp-analyzer/gunicorn.sock --proxy-headers --forwarded-allow-ips=*
+ExecStopPost=/usr/bin/rm -f /home/ubuntu/rhp-analyzer/gunicorn.sock
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

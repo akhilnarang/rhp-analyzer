@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}{{ filename }}{% endblock %}
+{% block nav_detail %}<small class="text-light nav-detail">{{ filename }}</small>{% endblock %}
+{% block content %}
+<section class="page-shell">
+  {% if analysis %}
+  <article class="report">{{ report_html | safe }}</article>
+  {% elif job.status == "failed" %}
+  <article class="card analysis-state" data-variant="danger">
+    <header><h2>Analysis failed</h2></header>
+    <p>{{ job.error }}</p>
+    <p>Upload the PDF again to retry the analysis.</p>
+  </article>
+  {% else %}
+  <article class="card analysis-state">
+    <header><h2>Analysis in progress</h2></header>
+    <p id="message">{{ job.message }}</p>
+    <progress id="progress" value="{{ progress }}" max="100">{{ progress }}%</progress>
+    <p id="count" class="text-light">{{ job.completed_sections }} of {{ job.total_sections }} sections</p>
+    <small class="text-light">You can close this page and open the same link later.</small>
+  </article>
+  {% endif %}
+</section>
+{% endblock %}
+{% block scripts %}
+{% if analysis %}
+<script>
+document.querySelectorAll(".report table").forEach((table) => {
+  const headers = Array.from(table.querySelectorAll("thead th"))
+    .map((cell, index) => cell.textContent.trim() || `Column ${index + 1}`);
+  table.querySelectorAll("tbody tr").forEach((row) => {
+    Array.from(row.children).forEach((cell, index) => {
+      cell.dataset.label = headers[index] || `Column ${index + 1}`;
+      const value = document.createElement("span");
+      value.className = "cell-value";
+      while (cell.firstChild) value.appendChild(cell.firstChild);
+      cell.appendChild(value);
+    });
+  });
+});
+</script>
+{% endif %}
+{% if not analysis and job.status != "failed" %}
+<script>
+const statusUrl = {{ status_url | tojson }};
+async function updateStatus() {
+  try {
+    const response = await fetch(statusUrl, {cache: "no-store"});
+    if (!response.ok) throw new Error("Status request failed");
+    const data = await response.json();
+    document.querySelector("#message").textContent = data.message;
+    document.querySelector("#count").textContent =
+      `${data.completed_sections} of ${data.total_sections} sections`;
+    const percent = Math.round(data.completed_sections * 100 / data.total_sections);
+    document.querySelector("#progress").value = percent;
+    if (data.status === "completed" || data.status === "failed") {
+      window.location.reload();
+      return;
+    }
+  } catch (error) {
+    document.querySelector("#message").textContent =
+      "The page will try to get the status again.";
+  }
+  window.setTimeout(updateStatus, 2000);
+}
+window.setTimeout(updateStatus, 1000);
+</script>
+{% endif %}
+{% endblock %}

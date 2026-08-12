@@ -1,0 +1,25 @@
+# Files that Python tools make
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environment
+.venv
+
+# Local secret values
+.env
+.env.*
+!.env.example
+
+# Benchmark results
+benchmark-results/
+
+# Local service data
+data/
+
+# Local source documents
+*.pdf
+*.PDF

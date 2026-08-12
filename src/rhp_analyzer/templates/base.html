@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  {% block head %}{% endblock %}
+  <title>{% block title %}RHP Analyzer{% endblock %}</title>
+  <link rel="stylesheet" href="https://oat.ink/oat.min.css">
+  <link rel="stylesheet" href="{{ url_for('static', path='/site.css') }}">
+</head>
+<body>
+  <nav data-topnav class="topbar">
+    <div class="page-shell hstack justify-between">
+      <a class="brand" href="{{ url_for('home') }}">RHP Analyzer</a>
+      <div class="hstack nav-links">
+        {% block nav_detail %}{% endblock %}
+        <a href="{{ url_for('analysis_list') }}">Analyses</a>
+        <a href="{{ url_for('swagger_ui_html') }}">API</a>
+      </div>
+    </div>
+  </nav>
+  <main>{% block content %}{% endblock %}</main>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
