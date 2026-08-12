@@ -59,7 +59,7 @@ The production unit is in `deploy/rhp-analyzer.service`. It uses this path:
 It creates this Unix socket for nginx:
 
 ```text
-/home/ubuntu/rhp-analyzer/gunicorn.sock
+/home/ubuntu/rhp-analyzer/data/gunicorn.sock
 ```
 
 Install and start the unit with these commands:
@@ -82,6 +82,31 @@ curl -X POST http://localhost:8000/v1/analyze \
   -F 'sections=all'
 ```
 
+You can add optional market data. The service sends these values to the final report step:
+
+```bash
+curl -X POST http://localhost:8000/v1/analyze \
+  -H 'Authorization: Bearer YOUR_API_TOKEN' \
+  -F 'file=@RHP_LAPL_29072026.PDF;type=application/pdf' \
+  -F 'sections=all' \
+  -F 'lot_size=1200' \
+  -F 'price=₹94' \
+  -F 'issue_size=₹32.40 Cr' \
+  -F 'gmp=₹39' \
+  -F 'gmp_percent=41.49%' \
+  -F 'open_date=06 Aug 2026' \
+  -F 'close_date=10 Aug 2026' \
+  -F 'allotment_date=11 Aug 2026' \
+  -F 'subscription=258.4x' \
+  -F 'qib_subscription=94.62x' \
+  -F 'nii_subscription=303.49x' \
+  -F 'snii_subscription=239.34x' \
+  -F 'bnii_subscription=335.56x' \
+  -F 'rii_subscription=276.53x'
+```
+
+You can also send `employee_subscription`. Each market field is optional. Each value has a 100-character limit. The report labels these values as user-provided market data. It does not present them as PDF facts.
+
 You can send a public PDF URL instead of a file:
 
 ```bash
@@ -93,7 +118,7 @@ curl -X POST http://localhost:8000/v1/analyze \
 
 Send either `file` or `url`. Do not send both fields in one request.
 
-The default URL host list contains `www.bseindia.com` and `bseindia.com`. Set `RHP_ALLOWED_PDF_HOSTS` to use a different comma-separated list. The service checks each redirect against this list. This rule prevents the public API from fetching private network data.
+The service accepts an HTTP or HTTPS PDF URL from any public internet host. It checks the address for the first request and for every redirect. It blocks local, private, link-local, reserved, and metadata-service addresses. It pins each connection to a checked public address.
 
 The API calculates the checksum and creates a job. It then returns `202 Accepted` without waiting for the analysis.
 
@@ -125,11 +150,13 @@ Only `POST /v1/analyze` uses bearer-token authentication. The report pages, anal
 
 ## Source limits
 
-The upload route accepts PDF data only. It does not accept GMP, subscription, price, or other external market data.
+The PDF source must contain PDF data. The route also accepts the optional market fields shown above. The PDF extraction does not use this data. Only the final report uses it.
 
 The report uses only facts from the PDF. It identifies a value as not available when the PDF does not contain it.
 
 The default file-size limit is 50,000,000 bytes. Set `RHP_MAX_PDF_BYTES` to change this limit.
+
+The service runs the PDF parser in a Bubblewrap sandbox. The parser has no network access. It cannot read the `.env` file or application files. It can read only system libraries and the current PDF. CPU, memory, output-size, file, process, and time limits also apply. The production systemd unit blocks privilege changes and device access. It gives the service write access only to the data directory.
 
 ## Cache operation
 
@@ -145,7 +172,7 @@ The extraction cache key contains these values:
 - Selected sections.
 - Extraction prompt version.
 
-The report cache key also contains the report model and the report prompt version.
+The report cache key also contains the report model, report prompt version, and optional market data.
 
 The service returns the same analysis URL after a full cache hit. It does not call the model again.
 

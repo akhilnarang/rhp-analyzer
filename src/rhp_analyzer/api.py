@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 import logging
 import secrets
+import socket
 import tempfile
 import time
 from collections.abc import AsyncIterator
@@ -12,6 +14,7 @@ from pathlib import Path
 from typing import Annotated
 from urllib.parse import unquote
 
+import httpcore
 import httpx
 from fastapi import (
     Depends,
@@ -46,6 +49,98 @@ bearer_auth = HTTPBearer(
     scheme_name="RHPBearerAuth",
     description="Bearer token for POST /v1/analyze.",
 )
+
+MARKET_DATA_FIELDS = (
+    "lot_size",
+    "price",
+    "issue_size",
+    "gmp",
+    "gmp_percent",
+    "open_date",
+    "close_date",
+    "allotment_date",
+    "subscription",
+    "qib_subscription",
+    "nii_subscription",
+    "snii_subscription",
+    "bnii_subscription",
+    "rii_subscription",
+    "employee_subscription",
+)
+
+
+class UnsafeRemoteAddress(ValueError):
+    pass
+
+
+async def resolve_public_addresses(host: str, port: int) -> list[str]:
+    try:
+        async with asyncio.timeout(10):
+            answers = await asyncio.get_running_loop().getaddrinfo(
+                host,
+                port,
+                type=socket.SOCK_STREAM,
+            )
+    except TimeoutError as exc:
+        raise UnsafeRemoteAddress("The PDF URL host lookup timed out.") from exc
+    except socket.gaierror as exc:
+        raise UnsafeRemoteAddress("The PDF URL host could not be resolved.") from exc
+    addresses = list(dict.fromkeys(answer[4][0] for answer in answers))
+    if not addresses or any(
+        not ipaddress.ip_address(address).is_global for address in addresses
+    ):
+        raise UnsafeRemoteAddress(
+            "The PDF URL must resolve only to public internet addresses."
+        )
+    return addresses[:8]
+
+
+class PublicInternetBackend(httpcore.AsyncNetworkBackend):
+    """Resolve and pin each connection to a public internet address."""
+
+    def __init__(self) -> None:
+        self._backend = httpcore.AnyIOBackend()
+
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: object = None,
+    ) -> httpcore.AsyncNetworkStream:
+        addresses = await resolve_public_addresses(host, port)
+        last_error: Exception | None = None
+        for address in addresses:
+            try:
+                return await self._backend.connect_tcp(
+                    address,
+                    port,
+                    timeout=timeout,
+                    local_address=local_address,
+                    socket_options=socket_options,
+                )
+            except httpcore.ConnectError as exc:
+                last_error = exc
+        assert last_error is not None
+        raise last_error
+
+    async def connect_unix_socket(
+        self,
+        path: str,
+        timeout: float | None = None,
+        socket_options: object = None,
+    ) -> httpcore.AsyncNetworkStream:
+        raise UnsafeRemoteAddress("Unix sockets are not valid PDF URL targets.")
+
+    async def sleep(self, seconds: float) -> None:
+        await self._backend.sleep(seconds)
+
+
+def public_internet_transport() -> httpx.AsyncHTTPTransport:
+    transport = httpx.AsyncHTTPTransport(trust_env=False, retries=0)
+    transport._pool._network_backend = PublicInternetBackend()  # type: ignore[attr-defined]
+    return transport
 
 
 def schedule_analysis(app: FastAPI, analysis_id: str) -> None:
@@ -127,13 +222,11 @@ async def persist_upload(
         raise
 
 
-def validate_remote_host(url: httpx.URL, allowed_hosts: set[str]) -> None:
-    host = (url.host or "").lower().rstrip(".")
-    if host not in allowed_hosts:
-        allowed = ", ".join(sorted(allowed_hosts))
+def validate_remote_url(url: httpx.URL) -> None:
+    if url.scheme not in {"http", "https"} or not url.host:
         raise HTTPException(
             status_code=422,
-            detail=f"The PDF URL host is not allowed. Allowed hosts: {allowed}.",
+            detail="The PDF URL must use HTTP or HTTPS.",
         )
     if url.userinfo:
         raise HTTPException(
@@ -146,7 +239,6 @@ async def persist_remote_pdf(
     source_url: HttpUrl,
     *,
     max_bytes: int,
-    allowed_hosts: set[str],
 ) -> tuple[Path, str, int, str]:
     current_url = httpx.URL(str(source_url))
     headers = {
@@ -155,9 +247,13 @@ async def persist_remote_pdf(
     }
     path: Path | None = None
     try:
-        async with httpx.AsyncClient(timeout=60, follow_redirects=False) as client:
+        async with httpx.AsyncClient(
+            timeout=60,
+            follow_redirects=False,
+            transport=public_internet_transport(),
+        ) as client:
             for _ in range(6):
-                validate_remote_host(current_url, allowed_hosts)
+                validate_remote_url(current_url)
                 async with client.stream(
                     "GET", current_url, headers=headers
                 ) as response:
@@ -227,6 +323,10 @@ async def persist_remote_pdf(
         if path is not None:
             path.unlink(missing_ok=True)
         raise
+    except UnsafeRemoteAddress as exc:
+        if path is not None:
+            path.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except (httpx.HTTPError, ValueError) as exc:
         if path is not None:
             path.unlink(missing_ok=True)
@@ -250,6 +350,14 @@ def parse_sections(value: str | None, service: AnalysisService) -> list[str]:
     if not requested:
         raise HTTPException(status_code=422, detail="Select at least one section.")
     return sorted(requested)
+
+
+def collect_market_data(**values: str | None) -> dict[str, str]:
+    return {
+        name: value.strip()
+        for name, value in values.items()
+        if name in MARKET_DATA_FIELDS and value is not None and value.strip()
+    }
 
 
 def create_app(
@@ -329,6 +437,21 @@ def create_app(
             Form(description="Public URL for an RHP or DRHP PDF file."),
         ] = None,
         sections: Annotated[str | None, Form()] = None,
+        lot_size: Annotated[str | None, Form(max_length=100)] = None,
+        price: Annotated[str | None, Form(max_length=100)] = None,
+        issue_size: Annotated[str | None, Form(max_length=100)] = None,
+        gmp: Annotated[str | None, Form(max_length=100)] = None,
+        gmp_percent: Annotated[str | None, Form(max_length=100)] = None,
+        open_date: Annotated[str | None, Form(max_length=100)] = None,
+        close_date: Annotated[str | None, Form(max_length=100)] = None,
+        allotment_date: Annotated[str | None, Form(max_length=100)] = None,
+        subscription: Annotated[str | None, Form(max_length=100)] = None,
+        qib_subscription: Annotated[str | None, Form(max_length=100)] = None,
+        nii_subscription: Annotated[str | None, Form(max_length=100)] = None,
+        snii_subscription: Annotated[str | None, Form(max_length=100)] = None,
+        bnii_subscription: Annotated[str | None, Form(max_length=100)] = None,
+        rii_subscription: Annotated[str | None, Form(max_length=100)] = None,
+        employee_subscription: Annotated[str | None, Form(max_length=100)] = None,
     ) -> AnalysisLinkResponse:
         service: AnalysisService = request.app.state.analysis_service
         if (file is None) == (url is None):
@@ -337,6 +460,23 @@ def create_app(
                 detail="Send one PDF source. Use either file or url.",
             )
         parsed_sections = parse_sections(sections, service)
+        market_data = collect_market_data(
+            lot_size=lot_size,
+            price=price,
+            issue_size=issue_size,
+            gmp=gmp,
+            gmp_percent=gmp_percent,
+            open_date=open_date,
+            close_date=close_date,
+            allotment_date=allotment_date,
+            subscription=subscription,
+            qib_subscription=qib_subscription,
+            nii_subscription=nii_subscription,
+            snii_subscription=snii_subscription,
+            bnii_subscription=bnii_subscription,
+            rii_subscription=rii_subscription,
+            employee_subscription=employee_subscription,
+        )
         filename = safe_filename(file.filename) if file is not None else "remote.pdf"
         started = time.monotonic()
         logger.info(
@@ -356,7 +496,6 @@ def create_app(
                 path, checksum, size, filename = await persist_remote_pdf(
                     url,
                     max_bytes=app_settings.rhp_max_pdf_bytes,
-                    allowed_hosts=app_settings.allowed_pdf_hosts(),
                 )
             logger.info(
                 "PDF upload complete: file=%s bytes=%d sha256=%s",
@@ -372,6 +511,7 @@ def create_app(
                 model=app_settings.rhp_default_model,
                 retries=app_settings.rhp_default_retries,
                 sections=parsed_sections,
+                market_data=market_data,
             )
             path = None
             job = service.get_job_status(analysis_id)

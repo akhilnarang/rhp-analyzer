@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
 
-from rhp_analyzer.api import create_app
+from rhp_analyzer.api import UnsafeRemoteAddress, create_app, resolve_public_addresses
 from rhp_analyzer.cache import CacheStore
 from rhp_analyzer.config import Settings
 from rhp_analyzer.service import AnalysisService
@@ -18,6 +18,7 @@ class FakePipeline:
     def __init__(self) -> None:
         self.extractions = 0
         self.syntheses = 0
+        self.market_data: list[dict[str, str]] = []
         self.started: asyncio.Event | None = None
         self.release: asyncio.Event | None = None
 
@@ -55,6 +56,7 @@ class FakePipeline:
         **kwargs: object,
     ) -> tuple[str, dict[str, object]]:
         self.syntheses += 1
+        self.market_data.append(kwargs.get("market_data", {}))
         return (
             f"# Report\n\nModel: {kwargs['model']}",
             {
@@ -297,21 +299,80 @@ class ApiTests(TestCase):
 
         asyncio.run(scenario())
 
-    def test_remote_pdf_host_must_be_allowed(self) -> None:
+    def test_remote_pdf_host_must_not_resolve_to_a_private_address(self) -> None:
         async def scenario() -> None:
+            answer = (
+                2,
+                1,
+                6,
+                "",
+                ("127.0.0.1", 80),
+            )
+            loop = asyncio.get_running_loop()
+            with (
+                patch.object(
+                    loop,
+                    "getaddrinfo",
+                    AsyncMock(return_value=[answer]),
+                ),
+                self.assertRaisesRegex(UnsafeRemoteAddress, "public internet"),
+            ):
+                await resolve_public_addresses("internal.example", 80)
+
+        asyncio.run(scenario())
+
+    def test_market_data_changes_only_the_report_cache_key(self) -> None:
+        async def wait_for_report(client: AsyncClient, url: str) -> dict[str, object]:
+            analysis_id = url.rsplit("/", 1)[-1]
+            for _ in range(20):
+                response = await client.get(f"/v1/analyses/{analysis_id}/status")
+                if response.json()["status"] == "completed":
+                    result = await client.get(f"/v1/analyses/{analysis_id}")
+                    return result.json()
+                await asyncio.sleep(0.01)
+            self.fail("The analysis job did not finish.")
+
+        async def scenario() -> None:
+            payload = b"%PDF-1.4\nmarket data cache test\n%%EOF"
             async with AsyncClient(
                 transport=ASGITransport(app=self.app),
                 base_url="http://test",
             ) as client:
-                response = await client.post(
+                first = await client.post(
                     "/v1/analyze",
+                    files={"file": ("issuer.pdf", payload, "application/pdf")},
                     data={
-                        "url": "https://example.com/document.pdf",
                         "sections": "offer",
+                        "lot_size": "1200",
+                        "price": "₹94",
+                        "gmp": "₹39",
+                        "gmp_percent": "41.49%",
+                        "qib_subscription": "94.62x",
                     },
                 )
-            self.assertEqual(response.status_code, 422)
-            self.assertIn("not allowed", response.json()["detail"])
+                first_result = await wait_for_report(client, first.json()["url"])
+                second = await client.post(
+                    "/v1/analyze",
+                    files={"file": ("issuer.pdf", payload, "application/pdf")},
+                    data={
+                        "sections": "offer",
+                        "lot_size": "1200",
+                        "price": "₹94",
+                        "gmp": "₹40",
+                        "gmp_percent": "42.55%",
+                        "qib_subscription": "94.62x",
+                    },
+                )
+                second_result = await wait_for_report(client, second.json()["url"])
+            self.assertNotEqual(first.json()["url"], second.json()["url"])
+            self.assertEqual(self.pipeline.extractions, 1)
+            self.assertEqual(self.pipeline.syntheses, 2)
+            self.assertEqual(self.pipeline.market_data[0]["gmp"], "₹39")
+            self.assertEqual(self.pipeline.market_data[1]["gmp"], "₹40")
+            self.assertEqual(
+                first_result["metadata"]["market_data"]["lot_size"], "1200"
+            )
+            self.assertEqual(second_result["metadata"]["market_data"]["gmp"], "₹40")
 
         asyncio.run(scenario())
 
@@ -376,6 +437,8 @@ class ApiTests(TestCase):
         ]
         self.assertNotIn("model", body_schema["properties"])
         self.assertNotIn("force_refresh", body_schema["properties"])
+        self.assertIn("gmp", body_schema["properties"])
+        self.assertIn("qib_subscription", body_schema["properties"])
         response_schema = schema["paths"]["/v1/analyze"]["post"]["responses"]["202"][
             "content"
         ]["application/json"]["schema"]

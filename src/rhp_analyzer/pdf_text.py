@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import re
+import resource
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -109,15 +111,73 @@ SECTION_SPECS: tuple[SectionSpec, ...] = (
 )
 
 
+PDF_PARSE_TIMEOUT_SECONDS = 120
+MAX_EXTRACTED_TEXT_BYTES = 200_000_000
+
+
+def limit_pdf_parser() -> None:
+    """Limit CPU, memory, files, processes, and output for the PDF parser."""
+
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    resource.setrlimit(resource.RLIMIT_CPU, (90, 90))
+    resource.setrlimit(resource.RLIMIT_AS, (1_500_000_000, 1_500_000_000))
+    resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_EXTRACTED_TEXT_BYTES,) * 2)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+
+
 def extract_pages(pdf_path: Path) -> list[str]:
     """Extract the text. Keep the page limits and the text layout."""
 
-    completed = subprocess.run(
-        ["pdftotext", "-layout", str(pdf_path), "-"],
-        check=True,
-        capture_output=True,
-    )
-    pages = completed.stdout.decode("utf-8", errors="replace").split("\f")
+    source_path = pdf_path.resolve(strict=True)
+    command = [
+        "/usr/bin/bwrap",
+        "--unshare-all",
+        "--die-with-parent",
+        "--new-session",
+        "--clearenv",
+        "--ro-bind",
+        "/usr",
+        "/usr",
+        "--symlink",
+        "usr/lib",
+        "/lib",
+        "--symlink",
+        "usr/lib",
+        "/lib64",
+        "--dir",
+        "/tmp",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--ro-bind",
+        str(source_path),
+        "/input.pdf",
+        "/usr/bin/pdftotext",
+        "-q",
+        "-layout",
+        "/input.pdf",
+        "-",
+    ]
+    with tempfile.TemporaryFile() as output:
+        subprocess.run(
+            command,
+            check=True,
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=subprocess.PIPE,
+            timeout=PDF_PARSE_TIMEOUT_SECONDS,
+            preexec_fn=limit_pdf_parser,
+            start_new_session=True,
+        )
+        size = output.tell()
+        if size > MAX_EXTRACTED_TEXT_BYTES:
+            raise ValueError("The PDF produces too much extracted text.")
+        output.seek(0)
+        text = output.read(MAX_EXTRACTED_TEXT_BYTES + 1)
+    if len(text) > MAX_EXTRACTED_TEXT_BYTES:
+        raise ValueError("The PDF produces too much extracted text.")
+    pages = text.decode("utf-8", errors="replace").split("\f")
     if pages and not pages[-1].strip():
         pages.pop()
     return pages

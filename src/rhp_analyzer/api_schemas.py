@@ -37,6 +37,7 @@ class AnalysisMetadata(BaseModel):
     elapsed_seconds: float = Field(ge=0)
     usage: UsageSummary
     current_request_usage: UsageSummary
+    market_data: dict[str, str] = Field(default_factory=dict)
 
 
 class AnalysisResponse(BaseModel):

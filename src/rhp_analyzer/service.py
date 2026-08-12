@@ -97,8 +97,10 @@ class AnalysisService:
         model: str,
         retries: int,
         sections: list[str],
+        market_data: dict[str, str] | None = None,
     ) -> tuple[str, str]:
         sections = sorted(set(sections))
+        market_data = market_data or {}
         extraction_key = canonical_hash(
             {
                 "pdf_sha256": pdf_sha256,
@@ -113,6 +115,7 @@ class AnalysisService:
                 "extraction_key": extraction_key,
                 "model": model,
                 "prompt_version": REPORT_PROMPT_VERSION,
+                "market_data": market_data,
             }
         )
         return extraction_key, report_key
@@ -127,13 +130,16 @@ class AnalysisService:
         model: str,
         retries: int,
         sections: list[str],
+        market_data: dict[str, str] | None = None,
     ) -> tuple[str, bool]:
         sections = sorted(set(sections))
+        market_data = market_data or {}
         extraction_key, analysis_id = self.cache_keys(
             pdf_sha256=pdf_sha256,
             model=model,
             retries=retries,
             sections=sections,
+            market_data=market_data,
         )
         if self.get_cached(analysis_id) is not None:
             self.cache.put_job(
@@ -145,6 +151,7 @@ class AnalysisService:
                 model=model,
                 retries=retries,
                 sections=sections,
+                market_data=market_data,
                 pdf_path=None,
                 status="completed",
             )
@@ -174,6 +181,7 @@ class AnalysisService:
             model=model,
             retries=retries,
             sections=sections,
+            market_data=market_data,
             pdf_path=stored_pdf,
             status="queued",
         )
@@ -232,6 +240,7 @@ class AnalysisService:
                 model=job["model"],
                 retries=job["retries"],
                 sections=job["sections"],
+                market_data=job["market_data"],
                 progress_callback=progress,
             )
         except asyncio.CancelledError:
@@ -307,15 +316,18 @@ class AnalysisService:
         model: str,
         retries: int,
         sections: list[str],
+        market_data: dict[str, str] | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> AnalysisResponse:
         started = time.monotonic()
         sections = sorted(set(sections))
+        market_data = market_data or {}
         extraction_key, report_key = self.cache_keys(
             pdf_sha256=pdf_sha256,
             model=model,
             retries=retries,
             sections=sections,
+            market_data=market_data,
         )
         lock = self._locks.setdefault(report_key, asyncio.Lock())
         async with lock:
@@ -327,6 +339,7 @@ class AnalysisService:
                 model=model,
                 retries=retries,
                 sections=sections,
+                market_data=market_data,
                 extraction_key=extraction_key,
                 report_key=report_key,
                 started=started,
@@ -428,10 +441,12 @@ class AnalysisService:
             report_markdown, synthesis_raw_usage = await self.synthesizer(
                 extraction["records"],
                 model=parameters["model"],
+                market_data=parameters["market_data"],
             )
             report_metadata = {
                 "elapsed_seconds": round(time.monotonic() - synthesis_started, 3),
                 "usage": summarize_usage(synthesis_raw_usage),
+                "market_data": parameters["market_data"],
             }
             report = self.cache.put_report(
                 cache_key=report_key,
@@ -483,6 +498,7 @@ class AnalysisService:
                     ),
                     "usage": total_usage,
                     "current_request_usage": current_usage,
+                    "market_data": report["metadata"].get("market_data", {}),
                 },
             }
         )
@@ -523,6 +539,7 @@ class AnalysisService:
                     "elapsed_seconds": 0,
                     "usage": total_usage,
                     "current_request_usage": UsageSummary().model_dump(mode="json"),
+                    "market_data": report["metadata"].get("market_data", {}),
                 },
             }
         )

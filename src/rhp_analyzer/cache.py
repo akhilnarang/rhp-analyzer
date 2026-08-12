@@ -77,6 +77,7 @@ class CacheStore:
                     model TEXT NOT NULL,
                     retries INTEGER NOT NULL,
                     sections_json TEXT NOT NULL,
+                    market_data_json TEXT NOT NULL DEFAULT '{}',
                     pdf_path TEXT,
                     status TEXT NOT NULL,
                     stage TEXT NOT NULL,
@@ -91,11 +92,21 @@ class CacheStore:
                     ON analysis_jobs(status);
                 """
             )
+            job_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(analysis_jobs)")
+            }
+            if "market_data_json" not in job_columns:
+                connection.execute(
+                    "ALTER TABLE analysis_jobs "
+                    "ADD COLUMN market_data_json TEXT NOT NULL DEFAULT '{}'"
+                )
 
     @staticmethod
     def _decode_job(row: sqlite3.Row) -> dict[str, Any]:
         result = dict(row)
         result["sections"] = json.loads(result.pop("sections_json"))
+        result["market_data"] = json.loads(result.pop("market_data_json", "{}"))
         return result
 
     def get_job(self, analysis_id: str) -> dict[str, Any] | None:
@@ -137,6 +148,7 @@ class CacheStore:
         model: str,
         retries: int,
         sections: list[str],
+        market_data: dict[str, str],
         pdf_path: Path | None,
         status: str,
     ) -> dict[str, Any]:
@@ -149,13 +161,15 @@ class CacheStore:
                 """
                 INSERT INTO analysis_jobs (
                     analysis_id, extraction_key, pdf_sha256, filename,
-                    pdf_bytes, model, retries, sections_json, pdf_path,
+                    pdf_bytes, model, retries, sections_json, market_data_json,
+                    pdf_path,
                     status, stage, message, completed_sections,
                     total_sections, error, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(analysis_id) DO UPDATE SET
                     filename = excluded.filename,
                     pdf_bytes = excluded.pdf_bytes,
+                    market_data_json = excluded.market_data_json,
                     pdf_path = excluded.pdf_path,
                     status = excluded.status,
                     stage = excluded.stage,
@@ -174,6 +188,7 @@ class CacheStore:
                     model,
                     retries,
                     json.dumps(sections),
+                    json.dumps(market_data, ensure_ascii=False),
                     str(pdf_path) if pdf_path is not None else None,
                     status,
                     status,

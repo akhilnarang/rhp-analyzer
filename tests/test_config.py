@@ -16,10 +16,6 @@ class SettingsTests(TestCase):
         self.assertEqual(settings.rhp_max_pdf_bytes, 50_000_000)
         self.assertEqual(settings.rhp_section_concurrency, 4)
         self.assertEqual(settings.rhp_job_concurrency, 1)
-        self.assertEqual(
-            settings.allowed_pdf_hosts(),
-            {"www.bseindia.com", "bseindia.com"},
-        )
         self.assertEqual(settings.api_tokens(), set())
 
     def test_api_tokens_are_parsed_and_masked(self) -> None:

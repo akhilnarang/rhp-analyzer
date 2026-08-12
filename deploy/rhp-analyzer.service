@@ -9,11 +9,29 @@ WorkingDirectory=/home/ubuntu/rhp-analyzer
 EnvironmentFile=/home/ubuntu/rhp-analyzer/.env
 Environment=PYTHONUNBUFFERED=1
 UMask=0007
-ExecStart=/home/ubuntu/rhp-analyzer/.venv/bin/uvicorn rhp_analyzer.api:app --uds /home/ubuntu/rhp-analyzer/gunicorn.sock --proxy-headers --forwarded-allow-ips=*
-ExecStopPost=/usr/bin/rm -f /home/ubuntu/rhp-analyzer/gunicorn.sock
+ExecStart=/home/ubuntu/rhp-analyzer/.venv/bin/uvicorn rhp_analyzer.api:app --uds /home/ubuntu/rhp-analyzer/data/gunicorn.sock --proxy-headers --forwarded-allow-ips=*
+ExecStopPost=/usr/bin/rm -f /home/ubuntu/rhp-analyzer/data/gunicorn.sock
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/rhp-analyzer/data
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+MemoryMax=2G
+TasksMax=64
 
 [Install]
 WantedBy=default.target

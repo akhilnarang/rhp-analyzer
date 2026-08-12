@@ -22,15 +22,7 @@ class Settings(BaseSettings):
     rhp_max_pdf_bytes: int = 50_000_000
     rhp_section_concurrency: int = Field(default=4, ge=1, le=10)
     rhp_job_concurrency: int = Field(default=1, ge=1, le=10)
-    rhp_allowed_pdf_hosts: str = "www.bseindia.com,bseindia.com"
     rhp_api_tokens: SecretStr | None = None
-
-    def allowed_pdf_hosts(self) -> set[str]:
-        return {
-            host.strip().lower().rstrip(".")
-            for host in self.rhp_allowed_pdf_hosts.split(",")
-            if host.strip()
-        }
 
     def api_tokens(self) -> set[str]:
         if self.rhp_api_tokens is None:

@@ -53,6 +53,7 @@ class CacheTests(TestCase):
                 model="test-model",
                 retries=2,
                 sections=["offer", "business"],
+                market_data={"gmp": "₹39"},
                 pdf_path=pdf_path,
                 status="queued",
             )
@@ -66,6 +67,7 @@ class CacheTests(TestCase):
             job = cache.get_job("analysis")
             self.assertEqual(job["status"], "running")
             self.assertEqual(job["completed_sections"], 1)
+            self.assertEqual(job["market_data"], {"gmp": "₹39"})
             self.assertEqual(cache.pending_job_ids(), ["analysis"])
             listed_job = cache.list_jobs()[0]
             self.assertEqual(listed_job["analysis_id"], "analysis")
