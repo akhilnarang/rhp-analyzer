@@ -120,6 +120,8 @@ Send either `file` or `url`. Do not send both fields in one request.
 
 The service accepts an HTTP or HTTPS PDF URL from any public internet host. It checks the address for the first request and for every redirect. It blocks local, private, link-local, reserved, and metadata-service addresses. It pins each connection to a checked public address.
 
+Some document sites block cloud-server downloads. The API returns `424 Failed Dependency` when the source site refuses or fails the download. Upload the PDF file in this case.
+
 The API calculates the checksum and creates a job. It then returns `202 Accepted` without waiting for the analysis.
 
 ```json

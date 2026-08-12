@@ -261,18 +261,27 @@ async def persist_remote_pdf(
                         location = response.headers.get("location")
                         if not location:
                             raise HTTPException(
-                                status_code=502,
-                                detail="The PDF server returned an invalid redirect.",
+                                status_code=status.HTTP_424_FAILED_DEPENDENCY,
+                                detail=(
+                                    "The PDF server returned an invalid redirect. "
+                                    "Upload the PDF instead."
+                                ),
                             )
                         current_url = response.url.join(location)
                         continue
                     try:
                         response.raise_for_status()
                     except httpx.HTTPStatusError as exc:
+                        logger.warning(
+                            "PDF download refused: host=%s status=%d",
+                            current_url.host,
+                            response.status_code,
+                        )
                         raise HTTPException(
-                            status_code=502,
+                            status_code=status.HTTP_424_FAILED_DEPENDENCY,
                             detail=(
-                                f"The PDF server returned HTTP {response.status_code}."
+                                "The PDF server refused the download with "
+                                f"HTTP {response.status_code}. Upload the PDF instead."
                             ),
                         ) from exc
                     content_length = response.headers.get("content-length")
@@ -305,8 +314,11 @@ async def persist_remote_pdf(
                             temporary.write(chunk)
                     if size == 0:
                         raise HTTPException(
-                            status_code=502,
-                            detail="The PDF server returned an empty file.",
+                            status_code=status.HTTP_424_FAILED_DEPENDENCY,
+                            detail=(
+                                "The PDF server returned an empty file. "
+                                "Upload the PDF instead."
+                            ),
                         )
                     if first_bytes != b"%PDF-":
                         raise HTTPException(
@@ -316,8 +328,11 @@ async def persist_remote_pdf(
                     filename = safe_filename(unquote(Path(current_url.path).name))
                     return path, digest.hexdigest(), size, filename
             raise HTTPException(
-                status_code=502,
-                detail="The PDF server returned too many redirects.",
+                status_code=status.HTTP_424_FAILED_DEPENDENCY,
+                detail=(
+                    "The PDF server returned too many redirects. "
+                    "Upload the PDF instead."
+                ),
             )
     except HTTPException:
         if path is not None:
@@ -330,9 +345,16 @@ async def persist_remote_pdf(
     except (httpx.HTTPError, ValueError) as exc:
         if path is not None:
             path.unlink(missing_ok=True)
+        logger.warning(
+            "PDF download failed: host=%s error=%s",
+            current_url.host,
+            type(exc).__name__,
+        )
         raise HTTPException(
-            status_code=502,
-            detail="The service could not download the PDF.",
+            status_code=status.HTTP_424_FAILED_DEPENDENCY,
+            detail=(
+                "The service could not download the PDF. Upload the PDF instead."
+            ),
         ) from exc
 
 

@@ -4,10 +4,17 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import AsyncMock, patch
 
+import httpx
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
-from pydantic import SecretStr
+from pydantic import HttpUrl, SecretStr
 
-from rhp_analyzer.api import UnsafeRemoteAddress, create_app, resolve_public_addresses
+from rhp_analyzer.api import (
+    UnsafeRemoteAddress,
+    create_app,
+    persist_remote_pdf,
+    resolve_public_addresses,
+)
 from rhp_analyzer.cache import CacheStore
 from rhp_analyzer.config import Settings
 from rhp_analyzer.service import AnalysisService
@@ -318,6 +325,25 @@ class ApiTests(TestCase):
                 self.assertRaisesRegex(UnsafeRemoteAddress, "public internet"),
             ):
                 await resolve_public_addresses("internal.example", 80)
+
+        asyncio.run(scenario())
+
+    def test_remote_server_refusal_returns_failed_dependency(self) -> None:
+        async def scenario() -> None:
+            transport = httpx.MockTransport(
+                lambda _request: httpx.Response(403, content=b"refused")
+            )
+            with patch(
+                "rhp_analyzer.api.public_internet_transport",
+                return_value=transport,
+            ), self.assertRaises(HTTPException) as raised:
+                await persist_remote_pdf(
+                    HttpUrl("https://documents.example/offer.pdf"),
+                    max_bytes=1_000_000,
+                )
+            self.assertEqual(raised.exception.status_code, 424)
+            self.assertIn("HTTP 403", raised.exception.detail)
+            self.assertIn("Upload the PDF", raised.exception.detail)
 
         asyncio.run(scenario())
 
