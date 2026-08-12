@@ -15,16 +15,9 @@ Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
 NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/home/ubuntu/rhp-analyzer/data
-ProtectKernelTunables=yes
-ProtectControlGroups=yes
 LockPersonality=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 MemoryMax=2G
 TasksMax=64
 
