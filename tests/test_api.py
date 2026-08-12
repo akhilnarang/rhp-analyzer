@@ -138,7 +138,7 @@ class ApiTests(TestCase):
                     "/v1/analyze",
                     files={
                         "file": (
-                            "Molbio Diagnostics Limited - Red Herring Prospectus.PDF",
+                            "Shiprocket Limited - RHP - August 5, 2026-1785937235.PDF",
                             payload,
                             "application/pdf",
                         )
@@ -149,7 +149,7 @@ class ApiTests(TestCase):
                 first_body = first.json()
                 self.assertEqual(first.headers["location"], first_body["url"])
                 analysis_id = first_body["url"].rsplit("/", 1)[-1]
-                self.assertEqual(analysis_id, "molbio-diagnostics-limited")
+                self.assertEqual(analysis_id, "shiprocket-limited")
                 for _ in range(20):
                     status_response = await client.get(
                         f"/v1/analyses/{analysis_id}/status"

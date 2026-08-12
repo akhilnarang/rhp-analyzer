@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 LEGACY_ANALYSIS_PREFIX_LENGTH = 12
+PUBLIC_SLUG_VERSION = 2
 
 
 def analysis_slug(filename: str) -> str:
@@ -18,11 +19,12 @@ def analysis_slug(filename: str) -> str:
     name = Path(filename).stem
     name = re.sub(r"(?i)^registration[_-]?\d+[_-]?", "", name)
     name = re.sub(
-        r"(?i)[\s_-]*(?:draft[\s_-]+)?red[\s_-]+herring[\s_-]+prospectus$",
+        r"(?i)[\s_-]+(?:(?:draft[\s_-]+)?red[\s_-]+herring[\s_-]+prospectus|"
+        r"drhp|rhp|prospectus)(?:[\s_-].*)?$",
         "",
         name,
     )
-    name = re.sub(r"(?i)[\s_-]*(?:drhp|rhp|prospectus)$", "", name)
+    name = re.sub(r"(?i)(?:drhp|rhp)$", "", name)
     name = unicodedata.normalize("NFKD", name)
     name = name.encode("ascii", "ignore").decode("ascii").lower()
     name = name.replace("&", " and ")
@@ -92,6 +94,7 @@ class CacheStore:
                 CREATE TABLE IF NOT EXISTS analysis_jobs (
                     analysis_id TEXT PRIMARY KEY,
                     public_slug TEXT,
+                    public_slug_version INTEGER NOT NULL DEFAULT 2,
                     extraction_key TEXT NOT NULL,
                     pdf_sha256 TEXT NOT NULL,
                     filename TEXT NOT NULL,
@@ -123,16 +126,28 @@ class CacheStore:
                     "ALTER TABLE analysis_jobs "
                     "ADD COLUMN market_data_json TEXT NOT NULL DEFAULT '{}'"
                 )
+            needs_slug_migration = "public_slug_version" not in job_columns
             if "public_slug" not in job_columns:
                 connection.execute("ALTER TABLE analysis_jobs ADD COLUMN public_slug TEXT")
+            if needs_slug_migration:
+                connection.execute(
+                    "ALTER TABLE analysis_jobs ADD COLUMN "
+                    "public_slug_version INTEGER NOT NULL DEFAULT 1"
+                )
+                connection.execute("DROP INDEX IF EXISTS analysis_job_public_slug_idx")
             used_slugs: set[str] = set()
             rows = connection.execute(
-                "SELECT analysis_id, filename, public_slug FROM analysis_jobs "
+                "SELECT analysis_id, filename, public_slug, public_slug_version "
+                "FROM analysis_jobs "
                 "ORDER BY created_at"
             ).fetchall()
             for row in rows:
                 public_slug = str(row["public_slug"] or "")
-                if not public_slug or public_slug in used_slugs:
+                if (
+                    int(row["public_slug_version"]) < PUBLIC_SLUG_VERSION
+                    or not public_slug
+                    or public_slug in used_slugs
+                ):
                     public_slug = self._available_public_slug(
                         connection,
                         filename=str(row["filename"]),
@@ -140,8 +155,10 @@ class CacheStore:
                         used_slugs=used_slugs,
                     )
                     connection.execute(
-                        "UPDATE analysis_jobs SET public_slug = ? WHERE analysis_id = ?",
-                        (public_slug, row["analysis_id"]),
+                        "UPDATE analysis_jobs "
+                        "SET public_slug = ?, public_slug_version = ? "
+                        "WHERE analysis_id = ?",
+                        (public_slug, PUBLIC_SLUG_VERSION, row["analysis_id"]),
                     )
                 used_slugs.add(public_slug)
             connection.execute(
@@ -302,12 +319,13 @@ class CacheStore:
             connection.execute(
                 """
                 INSERT INTO analysis_jobs (
-                    analysis_id, public_slug, extraction_key, pdf_sha256, filename,
+                    analysis_id, public_slug, public_slug_version,
+                    extraction_key, pdf_sha256, filename,
                     pdf_bytes, model, retries, sections_json, market_data_json,
                     pdf_path,
                     status, stage, message, completed_sections,
                     total_sections, error, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(analysis_id) DO UPDATE SET
                     filename = excluded.filename,
                     pdf_bytes = excluded.pdf_bytes,
@@ -324,6 +342,7 @@ class CacheStore:
                 (
                     analysis_id,
                     public_slug,
+                    PUBLIC_SLUG_VERSION,
                     extraction_key,
                     pdf_sha256,
                     filename,
