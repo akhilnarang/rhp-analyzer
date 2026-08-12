@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 import unicodedata
 from datetime import datetime
@@ -13,7 +14,11 @@ from .api_schemas import AnalysisResponse
 
 PACKAGE_DIRECTORY = Path(__file__).parent
 STATIC_DIRECTORY = PACKAGE_DIRECTORY / "static"
+STATIC_VERSION = hashlib.sha256(
+    (STATIC_DIRECTORY / "site.css").read_bytes()
+).hexdigest()[:12]
 templates = Jinja2Templates(directory=PACKAGE_DIRECTORY / "templates")
+templates.env.globals["static_version"] = STATIC_VERSION
 markdown = MarkdownIt("commonmark", {"html": False}).enable("table")
 
 

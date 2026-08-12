@@ -148,6 +148,7 @@ class ApiTests(TestCase):
                 self.assertIn('data-instant-view="article"', page.text)
                 self.assertIn('itemprop="articleBody"', page.text)
                 self.assertIn('property="og:type" content="article"', page.text)
+                self.assertRegex(page.text, r"/static/site\.css\?v=[a-f0-9]{12}")
                 self.assertIn('aria-label="Table of contents"', page.text)
                 self.assertIn('href="#executive-summary"', page.text)
                 self.assertIn('<h2 id="executive-summary">Executive Summary</h2>', page.text)
