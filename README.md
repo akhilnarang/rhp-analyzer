@@ -126,9 +126,14 @@ The API calculates the checksum and creates a job. It then returns `202 Accepted
 
 ```json
 {
-  "url": "http://localhost:8000/analysis/ANALYSIS_ID"
+  "url": "http://localhost:8000/analysis/company-name"
 }
 ```
+
+The public URL uses a cleaned form of the PDF filename. For example,
+`Molbio Diagnostics Limited - Red Herring Prospectus.PDF` becomes
+`/analysis/molbio-diagnostics-limited`. If two analyses need the same slug, the
+newer one gets a short hash suffix. Existing hash URLs redirect to the public URL.
 
 The response also has a `Location` header with the same URL. A Telegram bot can send this URL to the user at once.
 

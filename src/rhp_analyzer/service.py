@@ -283,9 +283,21 @@ class AnalysisService:
         return self.cache.pending_job_ids()
 
     def list_jobs(self, *, limit: int = 100) -> list[dict[str, Any]]:
-        return self.cache.list_jobs(limit=limit)
+        return [
+            {
+                **job,
+                "public_id": self.public_analysis_id(str(job["analysis_id"])),
+            }
+            for job in self.cache.list_jobs(limit=limit)
+        ]
+
+    def public_analysis_id(self, analysis_id: str) -> str:
+        return self.cache.public_analysis_id(analysis_id)
 
     def get_job_status(self, analysis_id: str) -> dict[str, Any] | None:
+        analysis_id = self.cache.resolve_analysis_id(analysis_id)
+        if analysis_id is None:
+            return None
         job = self.cache.get_job(analysis_id)
         if job is not None:
             return job
@@ -504,6 +516,9 @@ class AnalysisService:
         )
 
     def get_cached(self, analysis_id: str) -> AnalysisResponse | None:
+        analysis_id = self.cache.resolve_analysis_id(analysis_id)
+        if analysis_id is None:
+            return None
         report = self.cache.get_report(analysis_id)
         if report is None:
             return None

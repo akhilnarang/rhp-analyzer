@@ -172,6 +172,10 @@ body > main {
   scroll-margin-top: 6rem;
 }
 
+.report-conclusion-divider {
+  margin-block: var(--space-12) var(--space-8);
+}
+
 .report-header {
   margin-block-end: var(--space-8);
 }

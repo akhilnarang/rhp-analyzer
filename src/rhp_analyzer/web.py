@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from markdown_it import MarkdownIt
+from markdown_it.token import Token
 from starlette.templating import Jinja2Templates
 
 from .api_schemas import AnalysisResponse
@@ -126,19 +127,30 @@ def report_content(
 
     contents: list[dict[str, str | int]] = []
     used_ids: set[str] = set()
-    for index, token in enumerate(tokens[:-1]):
+    rendered_tokens: list[Token] = []
+    for index, token in enumerate(tokens):
         if token.type != "heading_open" or token.tag not in {"h2", "h3"}:
+            rendered_tokens.append(token)
+            continue
+        if index + 1 >= len(tokens):
+            rendered_tokens.append(token)
             continue
         title = _heading_text(tokens[index + 1])
         if not title:
+            rendered_tokens.append(token)
             continue
         heading_id = _heading_id(title, used_ids)
         token.attrs["id"] = heading_id
+        if re.search(r"\bbottom line\s*$", title, flags=re.IGNORECASE):
+            divider = Token("hr", "hr", 0)
+            divider.attrs["class"] = "report-conclusion-divider"
+            rendered_tokens.append(divider)
         contents.append(
             {"id": heading_id, "title": title, "level": int(token.tag[1])}
         )
+        rendered_tokens.append(token)
 
-    return markdown.renderer.render(tokens, markdown.options, {}), contents
+    return markdown.renderer.render(rendered_tokens, markdown.options, {}), contents
 
 
 def report_body_html(analysis: AnalysisResponse) -> str:

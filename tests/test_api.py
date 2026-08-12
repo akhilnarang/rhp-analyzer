@@ -1,4 +1,6 @@
 import asyncio
+import re
+from html.parser import HTMLParser
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
@@ -18,7 +20,28 @@ from rhp_analyzer.api import (
 from rhp_analyzer.cache import CacheStore
 from rhp_analyzer.config import Settings
 from rhp_analyzer.service import AnalysisService
-from rhp_analyzer.web import analysis_title, report_content
+from rhp_analyzer.web import analysis_title
+
+
+class HtmlProbe(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.elements: list[tuple[str, dict[str, str | None]]] = []
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        self.elements.append((tag, dict(attrs)))
+
+    handle_startendtag = handle_starttag
+
+    def find(self, tag: str, **attrs: str) -> list[dict[str, str | None]]:
+        return [
+            element_attrs
+            for element_tag, element_attrs in self.elements
+            if element_tag == tag
+            and all(element_attrs.get(name) == value for name, value in attrs.items())
+        ]
 
 
 class FakePipeline:
@@ -67,7 +90,10 @@ class FakePipeline:
         self.market_data.append(kwargs.get("market_data", {}))
         return (
             self.report_markdown
-            or f"# Report\n\n## Executive Summary\n\nModel: {kwargs['model']}",
+            or (
+                "# Report\n\n## Executive Summary\n\n"
+                f"Model: {kwargs['model']}\n\n## Bottom Line\n\nNeutral."
+            ),
             {
                 "input_tokens": 50,
                 "output_tokens": 10,
@@ -110,13 +136,20 @@ class ApiTests(TestCase):
             ) as client:
                 first = await client.post(
                     "/v1/analyze",
-                    files={"file": ("issuer.pdf", payload, "application/pdf")},
+                    files={
+                        "file": (
+                            "Molbio Diagnostics Limited - Red Herring Prospectus.PDF",
+                            payload,
+                            "application/pdf",
+                        )
+                    },
                     data=form,
                 )
                 self.assertEqual(first.status_code, 202)
                 first_body = first.json()
                 self.assertEqual(first.headers["location"], first_body["url"])
                 analysis_id = first_body["url"].rsplit("/", 1)[-1]
+                self.assertEqual(analysis_id, "molbio-diagnostics-limited")
                 for _ in range(20):
                     status_response = await client.get(
                         f"/v1/analyses/{analysis_id}/status"
@@ -141,21 +174,58 @@ class ApiTests(TestCase):
                 fetched = await client.get(f"/v1/analyses/{analysis_id}")
                 self.assertEqual(fetched.status_code, 200)
                 self.assertEqual(fetched.json()["analysis_id"], analysis_id)
+                full_analysis_id = fetched.json()["cache"]["report_key"]
+
+                legacy_page = await client.get(
+                    f"/analysis/{full_analysis_id}", follow_redirects=False
+                )
+                self.assertEqual(legacy_page.status_code, 308)
+                self.assertTrue(legacy_page.headers["location"].endswith(first_body["url"]))
 
                 page = await client.get(first_body["url"])
                 self.assertEqual(page.status_code, 200)
-                self.assertIn('<h1 class="report-title">Report</h1>', page.text)
-                self.assertIn('data-instant-view="article"', page.text)
-                self.assertIn('itemprop="articleBody"', page.text)
-                self.assertIn('property="og:type" content="article"', page.text)
-                self.assertRegex(page.text, r"/static/site\.css\?v=[a-f0-9]{12}")
-                self.assertIn('aria-label="Table of contents"', page.text)
-                self.assertIn('href="#executive-summary"', page.text)
-                self.assertIn('<h2 id="executive-summary">Executive Summary</h2>', page.text)
-                self.assertIn(
-                    "document.getElementById(link.hash.slice(1))", page.text
+                html = HtmlProbe()
+                html.feed(page.text)
+                self.assertEqual(
+                    len(html.find("h1", **{"class": "report-title"})), 1
                 )
-                self.assertEqual(page.text.count(">Report</h1>"), 1)
+                self.assertEqual(
+                    len(html.find("section", **{"data-instant-view": "article"})),
+                    1,
+                )
+                self.assertEqual(len(html.find("article", itemprop="articleBody")), 1)
+                self.assertEqual(
+                    len(html.find("meta", property="og:type", content="article")),
+                    1,
+                )
+                stylesheets = html.find("link", rel="stylesheet")
+                self.assertTrue(
+                    any(
+                        re.search(r"/static/site\.css\?v=[a-f0-9]{12}$", href or "")
+                        for link in stylesheets
+                        if (href := link.get("href"))
+                    )
+                )
+                self.assertEqual(
+                    len(html.find("nav", **{"aria-label": "Table of contents"})),
+                    2,
+                )
+                heading_ids = {
+                    attrs["id"]
+                    for tag, attrs in html.elements
+                    if tag in {"h2", "h3"} and attrs.get("id")
+                }
+                toc_targets = {
+                    str(attrs["href"])[1:]
+                    for attrs in html.find("a")
+                    if str(attrs.get("href", "")).startswith("#")
+                }
+                self.assertEqual(toc_targets, heading_ids)
+                self.assertIn("executive-summary", heading_ids)
+                self.assertEqual(
+                    len(html.find("hr", **{"class": "report-conclusion-divider"})),
+                    1,
+                )
 
                 analysis_list = await client.get("/analysis")
                 self.assertEqual(analysis_list.status_code, 200)
@@ -165,18 +235,6 @@ class ApiTests(TestCase):
                 self.assertIn(f"/analysis/{analysis_id}", analysis_list.text)
 
         asyncio.run(scenario())
-
-    def test_report_content_supports_numbered_headings(self) -> None:
-        analysis = type(
-            "Report",
-            (),
-            {"report_markdown": "# Report\n\n## 1. Executive Summary\n\nText"},
-        )()
-
-        body, contents = report_content(analysis)
-
-        self.assertIn('<h2 id="1-executive-summary">', body)
-        self.assertEqual(contents[0]["id"], "1-executive-summary")
 
     def test_report_without_section_headings_uses_single_column(self) -> None:
         async def scenario() -> None:

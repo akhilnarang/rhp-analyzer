@@ -16,7 +16,7 @@
         <p>{{ job.summary }}</p>
         <small class="job-meta">Updated {{ job.updated_label }}</small>
         <footer>
-          <a class="button outline small" href="{{ url_for('analysis_page_route', analysis_id=job.analysis_id) }}">View analysis</a>
+          <a class="button outline small" href="{{ url_for('analysis_page_route', analysis_id=job.public_id) }}">View analysis</a>
         </footer>
       </article>
     </li>

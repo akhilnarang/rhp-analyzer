@@ -27,7 +27,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import HttpUrl
@@ -539,7 +539,8 @@ def create_app(
             job = service.get_job_status(analysis_id)
             if job is not None and job["status"] != "completed":
                 schedule_analysis(request.app, analysis_id)
-            url = f"{request_base_url}/analysis/{analysis_id}"
+            public_id = service.public_analysis_id(analysis_id)
+            url = f"{request_base_url}/analysis/{public_id}"
             response.headers["Location"] = url
             logger.info(
                 "Analysis link ready: file=%s analysis_id=%s new_job=%s elapsed=%.1fs",
@@ -569,7 +570,12 @@ def create_app(
         if result is None:
             raise HTTPException(status_code=404, detail="The analysis does not exist.")
         response.headers["Cache-Control"] = "no-store"
-        return AnalysisStatusResponse.model_validate(result)
+        return AnalysisStatusResponse.model_validate(
+            {
+                **result,
+                "analysis_id": service.public_analysis_id(str(result["analysis_id"])),
+            }
+        )
 
     @app.get(
         "/v1/analyses/{analysis_id}",
@@ -580,20 +586,35 @@ def create_app(
         result = service.get_cached(analysis_id)
         if result is None:
             raise HTTPException(status_code=404, detail="The analysis does not exist.")
-        return result
+        return result.model_copy(
+            update={"analysis_id": service.public_analysis_id(result.analysis_id)}
+        )
 
     @app.get(
         "/analysis/{analysis_id}",
         response_class=HTMLResponse,
         name="analysis_page_route",
     )
-    async def analysis_page_route(analysis_id: str, request: Request) -> HTMLResponse:
+    async def analysis_page_route(
+        analysis_id: str, request: Request
+    ) -> Response:
         service: AnalysisService = request.app.state.analysis_service
         job = service.get_job_status(analysis_id)
         if job is None:
             raise HTTPException(status_code=404, detail="The analysis does not exist.")
+        full_analysis_id = str(job["analysis_id"])
+        short_analysis_id = service.public_analysis_id(full_analysis_id)
+        if analysis_id != short_analysis_id:
+            return RedirectResponse(
+                request.url_for(
+                    "analysis_page_route", analysis_id=short_analysis_id
+                ),
+                status_code=status.HTTP_308_PERMANENT_REDIRECT,
+            )
         analysis = (
-            service.get_cached(analysis_id) if job["status"] == "completed" else None
+            service.get_cached(full_analysis_id)
+            if job["status"] == "completed"
+            else None
         )
         report_title = (
             web.analysis_title(
@@ -632,7 +653,9 @@ def create_app(
                 else "",
                 "canonical_url": str(request.url),
                 "status_url": str(
-                    request.url_for("get_analysis_status", analysis_id=analysis_id)
+                    request.url_for(
+                        "get_analysis_status", analysis_id=short_analysis_id
+                    )
                 ),
             },
             headers={"Cache-Control": cache_control},

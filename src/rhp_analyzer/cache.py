@@ -2,10 +2,31 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
+import unicodedata
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+LEGACY_ANALYSIS_PREFIX_LENGTH = 12
+
+
+def analysis_slug(filename: str) -> str:
+    """Make a stable public slug from a prospectus filename."""
+
+    name = Path(filename).stem
+    name = re.sub(r"(?i)^registration[_-]?\d+[_-]?", "", name)
+    name = re.sub(
+        r"(?i)[\s_-]*(?:draft[\s_-]+)?red[\s_-]+herring[\s_-]+prospectus$",
+        "",
+        name,
+    )
+    name = re.sub(r"(?i)[\s_-]*(?:drhp|rhp|prospectus)$", "", name)
+    name = unicodedata.normalize("NFKD", name)
+    name = name.encode("ascii", "ignore").decode("ascii").lower()
+    name = name.replace("&", " and ")
+    return re.sub(r"[^a-z0-9]+", "-", name).strip("-") or "analysis"
 
 
 def utc_now() -> str:
@@ -70,6 +91,7 @@ class CacheStore:
 
                 CREATE TABLE IF NOT EXISTS analysis_jobs (
                     analysis_id TEXT PRIMARY KEY,
+                    public_slug TEXT,
                     extraction_key TEXT NOT NULL,
                     pdf_sha256 TEXT NOT NULL,
                     filename TEXT NOT NULL,
@@ -101,6 +123,31 @@ class CacheStore:
                     "ALTER TABLE analysis_jobs "
                     "ADD COLUMN market_data_json TEXT NOT NULL DEFAULT '{}'"
                 )
+            if "public_slug" not in job_columns:
+                connection.execute("ALTER TABLE analysis_jobs ADD COLUMN public_slug TEXT")
+            used_slugs: set[str] = set()
+            rows = connection.execute(
+                "SELECT analysis_id, filename, public_slug FROM analysis_jobs "
+                "ORDER BY created_at"
+            ).fetchall()
+            for row in rows:
+                public_slug = str(row["public_slug"] or "")
+                if not public_slug or public_slug in used_slugs:
+                    public_slug = self._available_public_slug(
+                        connection,
+                        filename=str(row["filename"]),
+                        analysis_id=str(row["analysis_id"]),
+                        used_slugs=used_slugs,
+                    )
+                    connection.execute(
+                        "UPDATE analysis_jobs SET public_slug = ? WHERE analysis_id = ?",
+                        (public_slug, row["analysis_id"]),
+                    )
+                used_slugs.add(public_slug)
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS analysis_job_public_slug_idx "
+                "ON analysis_jobs(public_slug)"
+            )
 
     @staticmethod
     def _decode_job(row: sqlite3.Row) -> dict[str, Any]:
@@ -116,6 +163,90 @@ class CacheStore:
                 (analysis_id,),
             ).fetchone()
         return None if row is None else self._decode_job(row)
+
+    def get_job_by_public_slug(self, public_slug: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM analysis_jobs WHERE public_slug = ?",
+                (public_slug,),
+            ).fetchone()
+        return None if row is None else self._decode_job(row)
+
+    def resolve_analysis_id(self, analysis_id: str) -> str | None:
+        """Resolve a public slug or an unambiguous legacy hash."""
+
+        job = self.get_job_by_public_slug(analysis_id)
+        if job is not None:
+            return str(job["analysis_id"])
+        if len(analysis_id) == 64:
+            with self._connect() as connection:
+                row = connection.execute(
+                    """
+                    SELECT analysis_id FROM analysis_jobs WHERE analysis_id = ?
+                    UNION
+                    SELECT cache_key AS analysis_id FROM report_cache WHERE cache_key = ?
+                    """,
+                    (analysis_id, analysis_id),
+                ).fetchone()
+            return analysis_id if row is not None else None
+        if not (
+            LEGACY_ANALYSIS_PREFIX_LENGTH <= len(analysis_id) < 64
+            and all(character in "0123456789abcdef" for character in analysis_id)
+        ):
+            return None
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                WITH ids AS (
+                    SELECT analysis_id FROM analysis_jobs
+                    UNION
+                    SELECT cache_key AS analysis_id FROM report_cache
+                )
+                SELECT analysis_id FROM ids
+                WHERE analysis_id LIKE ?
+                LIMIT 2
+                """,
+                (f"{analysis_id}%",),
+            ).fetchall()
+        if len(rows) != 1:
+            return None
+        return str(rows[0]["analysis_id"])
+
+    def public_analysis_id(self, analysis_id: str) -> str:
+        """Return the stable public slug for one analysis."""
+
+        job = self.get_job(analysis_id)
+        if job is not None and job.get("public_slug"):
+            return str(job["public_slug"])
+        return analysis_id
+
+    @staticmethod
+    def _available_public_slug(
+        connection: sqlite3.Connection,
+        *,
+        filename: str,
+        analysis_id: str,
+        used_slugs: set[str] | None = None,
+    ) -> str:
+        base = analysis_slug(filename)
+        reserved = used_slugs or set()
+
+        def is_available(candidate: str) -> bool:
+            if candidate in reserved:
+                return False
+            row = connection.execute(
+                "SELECT analysis_id FROM analysis_jobs WHERE public_slug = ?",
+                (candidate,),
+            ).fetchone()
+            return row is None or row["analysis_id"] == analysis_id
+
+        if is_available(base):
+            return base
+        for length in range(6, len(analysis_id) + 1):
+            candidate = f"{base}-{analysis_id[:length]}"
+            if is_available(candidate):
+                return candidate
+        return f"{base}-{analysis_id}"
 
     def pending_job_ids(self) -> list[str]:
         with self._connect() as connection:
@@ -157,15 +288,26 @@ class CacheStore:
             "The analysis is ready." if status == "completed" else "Waiting to start."
         )
         with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT public_slug FROM analysis_jobs WHERE analysis_id = ?",
+                (analysis_id,),
+            ).fetchone()
+            public_slug = (
+                str(existing["public_slug"])
+                if existing is not None and existing["public_slug"]
+                else self._available_public_slug(
+                    connection, filename=filename, analysis_id=analysis_id
+                )
+            )
             connection.execute(
                 """
                 INSERT INTO analysis_jobs (
-                    analysis_id, extraction_key, pdf_sha256, filename,
+                    analysis_id, public_slug, extraction_key, pdf_sha256, filename,
                     pdf_bytes, model, retries, sections_json, market_data_json,
                     pdf_path,
                     status, stage, message, completed_sections,
                     total_sections, error, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(analysis_id) DO UPDATE SET
                     filename = excluded.filename,
                     pdf_bytes = excluded.pdf_bytes,
@@ -181,6 +323,7 @@ class CacheStore:
                 """,
                 (
                     analysis_id,
+                    public_slug,
                     extraction_key,
                     pdf_sha256,
                     filename,
