@@ -134,6 +134,22 @@ The response also has a `Location` header with the same URL. A Telegram bot can 
 
 Open the URL in a browser. The page shows the number of completed sections. It gets new status data every two seconds. It shows the report when the analysis is complete.
 
+## Use Telegram Instant View
+
+Completed analysis pages contain a static article with a separate title, description, date, and body. The progress and failure pages do not contain this article.
+
+Paste `deploy/telegram-instant-view.txt` into the [Telegram Instant View Editor](https://instantview.telegram.org/). Save the template and copy its `rhash` value.
+
+Send the normal analysis URL while the job runs. After the status API returns `completed`, send or edit the message to use this URL:
+
+```text
+https://t.me/iv?url=ENCODED_ANALYSIS_URL&rhash=YOUR_TEMPLATE_RHASH
+```
+
+Do not send the Instant View URL before completion. Telegram caches Instant View pages, and a running analysis is not a static article.
+
+If Telegram approves the template for the public domain, ordinary analysis links can show the Instant View button without the `t.me/iv` wrapper.
+
 The service builds the public URL from the request host, scheme, and proxy headers. Configure the HTTPS proxy to send the correct forwarded headers.
 
 Get the job status with this request:

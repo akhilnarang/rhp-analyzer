@@ -77,3 +77,14 @@ def format_timestamp(value: str) -> str:
 
 def report_html(analysis: AnalysisResponse) -> str:
     return markdown.render(analysis.report_markdown)
+
+
+def report_body_html(analysis: AnalysisResponse) -> str:
+    """Render the report without its first heading."""
+
+    rendered = report_html(analysis)
+    return re.sub(r"\A<h1>.*?</h1>\s*", "", rendered, count=1, flags=re.DOTALL)
+
+
+def report_description(title: str) -> str:
+    return f"IPO RHP or DRHP research report for {title}, with source-page evidence."

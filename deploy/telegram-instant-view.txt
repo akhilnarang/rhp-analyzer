@@ -1,0 +1,11 @@
+~version: "2.1"
+
+# Generate Instant View only for a completed analysis page.
+?path: /analysis/[0-9a-f]{64}
+?exists: //section[@data-instant-view="article"]
+
+title: //section[@data-instant-view="article"]/header/h1
+description: //section[@data-instant-view="article"]/header/p
+published_date: //section[@data-instant-view="article"]/header/time/@datetime
+site_name: "RHP Analyzer"
+body: //section[@data-instant-view="article"]/article[@itemprop="articleBody"]

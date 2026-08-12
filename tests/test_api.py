@@ -142,7 +142,11 @@ class ApiTests(TestCase):
 
                 page = await client.get(first_body["url"])
                 self.assertEqual(page.status_code, 200)
-                self.assertIn("<h1>Report</h1>", page.text)
+                self.assertIn('<h1 class="report-title">Report</h1>', page.text)
+                self.assertIn('data-instant-view="article"', page.text)
+                self.assertIn('itemprop="articleBody"', page.text)
+                self.assertIn('property="og:type" content="article"', page.text)
+                self.assertEqual(page.text.count(">Report</h1>"), 1)
 
                 analysis_list = await client.get("/analysis")
                 self.assertEqual(analysis_list.status_code, 200)
@@ -171,6 +175,7 @@ class ApiTests(TestCase):
                 await asyncio.wait_for(self.pipeline.started.wait(), timeout=1)
                 page = await client.get(response.json()["url"])
                 self.assertIn("Analysis in progress", page.text)
+                self.assertNotIn('data-instant-view="article"', page.text)
                 analysis_id = response.json()["url"].rsplit("/", 1)[-1]
                 current = await client.get(f"/v1/analyses/{analysis_id}/status")
                 self.assertEqual(current.json()["status"], "running")

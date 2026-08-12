@@ -1,10 +1,29 @@
 {% extends "base.html" %}
-{% block title %}{{ filename }}{% endblock %}
+{% block title %}{{ report_title or filename }}{% endblock %}
+{% block head %}
+{% if analysis %}
+  <link rel="canonical" href="{{ canonical_url }}">
+  <meta name="description" content="{{ report_description }}">
+  <meta property="og:type" content="article">
+  <meta property="og:title" content="{{ report_title }}">
+  <meta property="og:description" content="{{ report_description }}">
+  <meta property="og:site_name" content="RHP Analyzer">
+  <meta property="og:url" content="{{ canonical_url }}">
+  <meta property="article:published_time" content="{{ analysis.metadata.created_at }}">
+{% endif %}
+{% endblock %}
 {% block nav_detail %}<small class="text-light nav-detail">{{ filename }}</small>{% endblock %}
 {% block content %}
 <section class="page-shell">
   {% if analysis %}
-  <article class="report">{{ report_html | safe }}</article>
+  <section class="instant-view-article" data-instant-view="article">
+    <header class="report-header">
+      <h1 class="report-title">{{ report_title }}</h1>
+      <p class="report-summary">{{ report_description }}</p>
+      <time class="text-light" datetime="{{ analysis.metadata.created_at }}">{{ report_date }}</time>
+    </header>
+    <article class="report" itemprop="articleBody">{{ report_body_html | safe }}</article>
+  </section>
   {% elif job.status == "failed" %}
   <article class="card analysis-state" data-variant="danger">
     <header><h2>Analysis failed</h2></header>

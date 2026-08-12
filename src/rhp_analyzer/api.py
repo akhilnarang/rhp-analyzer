@@ -595,6 +595,16 @@ def create_app(
         analysis = (
             service.get_cached(analysis_id) if job["status"] == "completed" else None
         )
+        report_title = (
+            web.analysis_title(
+                {
+                    "filename": job.get("filename", "RHP analysis"),
+                    "report_markdown": analysis.report_markdown,
+                }
+            )
+            if analysis is not None
+            else None
+        )
         cache_control = "public, max-age=300" if analysis is not None else "no-store"
         return web.templates.TemplateResponse(
             request=request,
@@ -603,13 +613,21 @@ def create_app(
                 "job": job,
                 "analysis": analysis,
                 "filename": job.get("filename", "RHP analysis"),
+                "report_title": report_title,
                 "progress": min(
                     round(job["completed_sections"] * 100 / job["total_sections"]),
                     100,
                 ),
-                "report_html": web.report_html(analysis)
+                "report_body_html": web.report_body_html(analysis)
                 if analysis is not None
                 else "",
+                "report_description": web.report_description(report_title)
+                if report_title is not None
+                else "",
+                "report_date": web.format_timestamp(analysis.metadata.created_at)
+                if analysis is not None
+                else "",
+                "canonical_url": str(request.url),
                 "status_url": str(
                     request.url_for("get_analysis_status", analysis_id=analysis_id)
                 ),

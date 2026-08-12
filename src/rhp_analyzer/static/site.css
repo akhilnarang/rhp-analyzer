@@ -96,6 +96,19 @@ body > main {
   overflow-wrap: anywhere;
 }
 
+.report-header {
+  margin-block-end: var(--space-8);
+}
+
+.report-title {
+  margin-block-end: var(--space-3);
+}
+
+.report-summary {
+  color: var(--muted-foreground);
+  font-size: var(--text-5);
+}
+
 .report table {
   display: block;
   width: 100%;
@@ -124,7 +137,7 @@ body > main {
     display: none;
   }
 
-  .report h1 {
+  .report-title {
     font-size: var(--text-2);
     margin-block: var(--space-4) var(--space-6);
   }
