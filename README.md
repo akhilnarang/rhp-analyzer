@@ -156,7 +156,7 @@ The report uses only facts from the PDF. It identifies a value as not available 
 
 The default file-size limit is 50,000,000 bytes. Set `RHP_MAX_PDF_BYTES` to change this limit.
 
-The service runs the PDF parser in a Bubblewrap sandbox. The parser has no network access. It cannot read the `.env` file or application files. It can read only system libraries and the current PDF. CPU, memory, output-size, file, process, and time limits also apply. The production systemd unit blocks privilege changes and device access. It gives the service write access only to the data directory.
+The service runs the PDF parser in a Bubblewrap sandbox. The parser has no network access. It cannot read the `.env` file or application files. It can read only system libraries and the current PDF. It sees a new minimal device directory. CPU, memory, output-size, file, process, and time limits also apply. The production systemd unit blocks privilege changes. It gives the service write access only to the data directory.
 
 ## Cache operation
 
