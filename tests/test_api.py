@@ -18,7 +18,7 @@ from rhp_analyzer.api import (
 from rhp_analyzer.cache import CacheStore
 from rhp_analyzer.config import Settings
 from rhp_analyzer.service import AnalysisService
-from rhp_analyzer.web import analysis_title
+from rhp_analyzer.web import analysis_title, report_content
 
 
 class FakePipeline:
@@ -28,6 +28,7 @@ class FakePipeline:
         self.market_data: list[dict[str, str]] = []
         self.started: asyncio.Event | None = None
         self.release: asyncio.Event | None = None
+        self.report_markdown: str | None = None
 
     async def extract(
         self, _pdf_path: Path, **kwargs: object
@@ -65,7 +66,8 @@ class FakePipeline:
         self.syntheses += 1
         self.market_data.append(kwargs.get("market_data", {}))
         return (
-            f"# Report\n\nModel: {kwargs['model']}",
+            self.report_markdown
+            or f"# Report\n\n## Executive Summary\n\nModel: {kwargs['model']}",
             {
                 "input_tokens": 50,
                 "output_tokens": 10,
@@ -146,6 +148,12 @@ class ApiTests(TestCase):
                 self.assertIn('data-instant-view="article"', page.text)
                 self.assertIn('itemprop="articleBody"', page.text)
                 self.assertIn('property="og:type" content="article"', page.text)
+                self.assertIn('aria-label="Table of contents"', page.text)
+                self.assertIn('href="#executive-summary"', page.text)
+                self.assertIn('<h2 id="executive-summary">Executive Summary</h2>', page.text)
+                self.assertIn(
+                    "document.getElementById(link.hash.slice(1))", page.text
+                )
                 self.assertEqual(page.text.count(">Report</h1>"), 1)
 
                 analysis_list = await client.get("/analysis")
@@ -154,6 +162,50 @@ class ApiTests(TestCase):
                 self.assertIn("Ready", analysis_list.text)
                 self.assertIn("View analysis", analysis_list.text)
                 self.assertIn(f"/analysis/{analysis_id}", analysis_list.text)
+
+        asyncio.run(scenario())
+
+    def test_report_content_supports_numbered_headings(self) -> None:
+        analysis = type(
+            "Report",
+            (),
+            {"report_markdown": "# Report\n\n## 1. Executive Summary\n\nText"},
+        )()
+
+        body, contents = report_content(analysis)
+
+        self.assertIn('<h2 id="1-executive-summary">', body)
+        self.assertEqual(contents[0]["id"], "1-executive-summary")
+
+    def test_report_without_section_headings_uses_single_column(self) -> None:
+        async def scenario() -> None:
+            self.pipeline.report_markdown = "# Report\n\nPlain report text."
+            async with AsyncClient(
+                transport=ASGITransport(app=self.app),
+                base_url="http://test",
+            ) as client:
+                response = await client.post(
+                    "/v1/analyze",
+                    files={
+                        "file": (
+                            "plain.pdf",
+                            b"%PDF-1.4\nplain report test\n%%EOF",
+                            "application/pdf",
+                        )
+                    },
+                    data={"sections": "offer"},
+                )
+                analysis_url = response.json()["url"]
+                for _ in range(20):
+                    page = await client.get(analysis_url)
+                    if "Plain report text." in page.text:
+                        break
+                    await asyncio.sleep(0.01)
+                else:
+                    self.fail("The analysis job did not finish.")
+
+                self.assertIn('class="report-layout report-layout-single"', page.text)
+                self.assertNotIn('aria-label="Table of contents"', page.text)
 
         asyncio.run(scenario())
 

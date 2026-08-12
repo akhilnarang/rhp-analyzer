@@ -96,6 +96,82 @@ body > main {
   overflow-wrap: anywhere;
 }
 
+.report-page-shell {
+  width: min(1220px, calc(100% - 2rem));
+}
+
+.report-layout {
+  display: grid;
+  grid-template-columns: minmax(11rem, 15rem) minmax(0, 920px);
+  gap: clamp(var(--space-6), 4vw, var(--space-12));
+  align-items: start;
+  justify-content: center;
+}
+
+.report-layout-single {
+  grid-template-columns: minmax(0, 920px);
+}
+
+.report-main {
+  min-width: 0;
+}
+
+.report-toc-sidebar {
+  position: sticky;
+  top: calc(4rem + var(--space-5));
+  max-height: calc(100vh - 4rem - var(--space-10));
+  overflow-y: auto;
+}
+
+.report-toc-mobile {
+  display: none;
+}
+
+.report-toc-title {
+  margin-block: 0 var(--space-3);
+  font-size: var(--text-7);
+  font-weight: var(--font-semibold);
+}
+
+.report-toc ol {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0 0 0 var(--space-3);
+  border-left: 1px solid var(--border);
+  list-style: none;
+}
+
+.report-toc li {
+  margin: 0;
+}
+
+.report-toc-level-3 {
+  padding-inline-start: var(--space-3);
+}
+
+.report-toc a {
+  display: block;
+  color: var(--muted-foreground);
+  font-size: var(--text-8);
+  line-height: 1.35;
+  text-decoration: none;
+}
+
+.report-toc a:hover,
+.report-toc a[aria-current="location"] {
+  color: var(--foreground);
+}
+
+.report-toc a[aria-current="location"] {
+  font-weight: var(--font-semibold);
+}
+
+.report h2[id],
+.report h3[id] {
+  scroll-margin-top: 6rem;
+}
+
 .report-header {
   margin-block-end: var(--space-8);
 }
@@ -231,5 +307,37 @@ body > main {
 
   .job-list article > footer .button {
     width: 100%;
+  }
+}
+
+@media (max-width: 959px) {
+  .report-page-shell {
+    width: min(920px, calc(100% - 2rem));
+  }
+
+  .report-layout {
+    display: block;
+  }
+
+  .report-toc-sidebar {
+    display: none;
+  }
+
+  .report-toc-mobile {
+    display: block;
+    margin-block-end: var(--space-6);
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-medium);
+    background: var(--card);
+  }
+
+  .report-toc-mobile summary {
+    cursor: pointer;
+    font-weight: var(--font-semibold);
+  }
+
+  .report-toc-mobile .report-toc {
+    margin-block-start: var(--space-4);
   }
 }

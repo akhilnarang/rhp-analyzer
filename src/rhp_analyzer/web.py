@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -79,11 +80,66 @@ def report_html(analysis: AnalysisResponse) -> str:
     return markdown.render(analysis.report_markdown)
 
 
+def _heading_text(token: Any) -> str:
+    if token.children is None:
+        return str(token.content).strip()
+    parts = []
+    for child in token.children:
+        if child.type in {"text", "code_inline", "image"}:
+            parts.append(child.content)
+        elif child.type in {"softbreak", "hardbreak"}:
+            parts.append(" ")
+    return "".join(parts).strip()
+
+
+def _heading_id(title: str, used_ids: set[str]) -> str:
+    normalized = unicodedata.normalize("NFKD", title)
+    ascii_title = normalized.encode("ascii", "ignore").decode("ascii").lower()
+    base_id = re.sub(r"[^a-z0-9]+", "-", ascii_title).strip("-") or "section"
+    heading_id = base_id
+    number = 2
+    while heading_id in used_ids:
+        heading_id = f"{base_id}-{number}"
+        number += 1
+    used_ids.add(heading_id)
+    return heading_id
+
+
+def report_content(
+    analysis: AnalysisResponse,
+) -> tuple[str, list[dict[str, str | int]]]:
+    """Render the report body and make links for its section headings."""
+
+    tokens = markdown.parse(analysis.report_markdown)
+    if (
+        len(tokens) >= 3
+        and tokens[0].type == "heading_open"
+        and tokens[0].tag == "h1"
+        and tokens[2].type == "heading_close"
+    ):
+        tokens = tokens[3:]
+
+    contents: list[dict[str, str | int]] = []
+    used_ids: set[str] = set()
+    for index, token in enumerate(tokens[:-1]):
+        if token.type != "heading_open" or token.tag not in {"h2", "h3"}:
+            continue
+        title = _heading_text(tokens[index + 1])
+        if not title:
+            continue
+        heading_id = _heading_id(title, used_ids)
+        token.attrs["id"] = heading_id
+        contents.append(
+            {"id": heading_id, "title": title, "level": int(token.tag[1])}
+        )
+
+    return markdown.renderer.render(tokens, markdown.options, {}), contents
+
+
 def report_body_html(analysis: AnalysisResponse) -> str:
     """Render the report without its first heading."""
 
-    rendered = report_html(analysis)
-    return re.sub(r"\A<h1>.*?</h1>\s*", "", rendered, count=1, flags=re.DOTALL)
+    return report_content(analysis)[0]
 
 
 def report_description(title: str) -> str:

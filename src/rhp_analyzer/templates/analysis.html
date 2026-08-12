@@ -14,16 +14,44 @@
 {% endblock %}
 {% block nav_detail %}<small class="text-light nav-detail">{{ filename }}</small>{% endblock %}
 {% block content %}
-<section class="page-shell">
+<section class="page-shell{% if analysis %} report-page-shell{% endif %}">
   {% if analysis %}
-  <section class="instant-view-article" data-instant-view="article">
-    <header class="report-header">
-      <h1 class="report-title">{{ report_title }}</h1>
-      <p class="report-summary">{{ report_description }}</p>
-      <time class="text-light" datetime="{{ analysis.metadata.created_at }}">{{ report_date }}</time>
-    </header>
-    <article class="report" itemprop="articleBody">{{ report_body_html | safe }}</article>
-  </section>
+  <div class="report-layout{% if not report_toc %} report-layout-single{% endif %}">
+    {% if report_toc %}
+    <aside class="report-toc-sidebar">
+      <nav class="report-toc" aria-label="Table of contents">
+        <p class="report-toc-title">On this page</p>
+        <ol>
+          {% for item in report_toc %}
+          <li class="report-toc-level-{{ item.level }}"><a href="#{{ item.id }}">{{ item.title }}</a></li>
+          {% endfor %}
+        </ol>
+      </nav>
+    </aside>
+    {% endif %}
+    <div class="report-main">
+      {% if report_toc %}
+      <details class="report-toc-mobile">
+        <summary>On this page</summary>
+        <nav class="report-toc" aria-label="Table of contents">
+          <ol>
+            {% for item in report_toc %}
+            <li class="report-toc-level-{{ item.level }}"><a href="#{{ item.id }}">{{ item.title }}</a></li>
+            {% endfor %}
+          </ol>
+        </nav>
+      </details>
+      {% endif %}
+      <section class="instant-view-article" data-instant-view="article">
+        <header class="report-header">
+          <h1 class="report-title">{{ report_title }}</h1>
+          <p class="report-summary">{{ report_description }}</p>
+          <time class="text-light" datetime="{{ analysis.metadata.created_at }}">{{ report_date }}</time>
+        </header>
+        <article class="report" itemprop="articleBody">{{ report_body_html | safe }}</article>
+      </section>
+    </div>
+  </div>
   {% elif job.status == "failed" %}
   <article class="card analysis-state" data-variant="danger">
     <header><h2>Analysis failed</h2></header>
@@ -55,6 +83,47 @@ document.querySelectorAll(".report table").forEach((table) => {
       while (cell.firstChild) value.appendChild(cell.firstChild);
       cell.appendChild(value);
     });
+  });
+});
+
+const tocLinks = Array.from(document.querySelectorAll(".report-toc a"));
+const tocHeadings = Array.from(document.querySelectorAll(".report h2[id], .report h3[id]"));
+let tocFrame;
+function updateCurrentSection() {
+  let currentHeading = tocHeadings[0];
+  const atPageEnd = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2;
+  if (atPageEnd) {
+    currentHeading = tocHeadings.at(-1);
+  } else {
+    for (const heading of tocHeadings) {
+      if (heading.getBoundingClientRect().top > 112) break;
+      currentHeading = heading;
+    }
+  }
+  tocLinks.forEach((link) => {
+    if (currentHeading && link.hash === `#${currentHeading.id}`) {
+      link.setAttribute("aria-current", "location");
+    } else {
+      link.removeAttribute("aria-current");
+    }
+  });
+  tocFrame = undefined;
+}
+function requestCurrentSectionUpdate() {
+  if (!tocFrame) tocFrame = window.requestAnimationFrame(updateCurrentSection);
+}
+if (tocHeadings.length) {
+  updateCurrentSection();
+  window.addEventListener("scroll", requestCurrentSectionUpdate, {passive: true});
+}
+document.querySelectorAll(".report-toc-mobile a").forEach((link) => {
+  link.addEventListener("click", () => {
+    const heading = document.getElementById(link.hash.slice(1));
+    link.closest("details").removeAttribute("open");
+    if (heading) {
+      heading.tabIndex = -1;
+      heading.focus({preventScroll: true});
+    }
   });
 });
 </script>

@@ -605,6 +605,10 @@ def create_app(
             if analysis is not None
             else None
         )
+        report_body_html = ""
+        report_toc: list[dict[str, str | int]] = []
+        if analysis is not None:
+            report_body_html, report_toc = web.report_content(analysis)
         cache_control = "public, max-age=300" if analysis is not None else "no-store"
         return web.templates.TemplateResponse(
             request=request,
@@ -618,9 +622,8 @@ def create_app(
                     round(job["completed_sections"] * 100 / job["total_sections"]),
                     100,
                 ),
-                "report_body_html": web.report_body_html(analysis)
-                if analysis is not None
-                else "",
+                "report_body_html": report_body_html,
+                "report_toc": report_toc,
                 "report_description": web.report_description(report_title)
                 if report_title is not None
                 else "",
