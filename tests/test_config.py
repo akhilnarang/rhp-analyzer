@@ -20,6 +20,16 @@ class SettingsTests(TestCase):
             settings.allowed_pdf_hosts(),
             {"www.bseindia.com", "bseindia.com"},
         )
+        self.assertEqual(settings.api_tokens(), set())
+
+    def test_api_tokens_are_parsed_and_masked(self) -> None:
+        settings = Settings(
+            openai_api_key=SecretStr("test-key"),
+            rhp_api_tokens=SecretStr(" token-one,token-two "),
+            _env_file=None,
+        )
+        self.assertEqual(settings.api_tokens(), {"token-one", "token-two"})
+        self.assertNotIn("token-one", repr(settings))
 
     def test_secret_is_masked(self) -> None:
         settings = Settings(

@@ -23,12 +23,22 @@ class Settings(BaseSettings):
     rhp_section_concurrency: int = Field(default=4, ge=1, le=10)
     rhp_job_concurrency: int = Field(default=1, ge=1, le=10)
     rhp_allowed_pdf_hosts: str = "www.bseindia.com,bseindia.com"
+    rhp_api_tokens: SecretStr | None = None
 
     def allowed_pdf_hosts(self) -> set[str]:
         return {
             host.strip().lower().rstrip(".")
             for host in self.rhp_allowed_pdf_hosts.split(",")
             if host.strip()
+        }
+
+    def api_tokens(self) -> set[str]:
+        if self.rhp_api_tokens is None:
+            return set()
+        return {
+            token.strip()
+            for token in self.rhp_api_tokens.get_secret_value().split(",")
+            if token.strip()
         }
 
     def require_openai_api_key(self) -> str:

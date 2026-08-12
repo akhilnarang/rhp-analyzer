@@ -16,6 +16,14 @@ OPENAI_API_KEY=your-openai-key
 
 `OPENAI_API_KEY` is the only required setting. The service uses `https://api.openai.com/v1` by default.
 
+Set one or more bearer tokens when the service is public:
+
+```dotenv
+RHP_API_TOKENS=first-token,second-token
+```
+
+Separate multiple tokens with commas. If this setting is empty, the analysis request does not require a token.
+
 The application loads the key as a masked Pydantic secret. Git does not track the `.env` file.
 
 ## Start the API in development mode
@@ -69,6 +77,7 @@ Send a PDF to `POST /v1/analyze`.
 
 ```bash
 curl -X POST http://localhost:8000/v1/analyze \
+  -H 'Authorization: Bearer YOUR_API_TOKEN' \
   -F 'file=@RHP_LAPL_29072026.PDF;type=application/pdf' \
   -F 'sections=all'
 ```
@@ -77,6 +86,7 @@ You can send a public PDF URL instead of a file:
 
 ```bash
 curl -X POST http://localhost:8000/v1/analyze \
+  -H 'Authorization: Bearer YOUR_API_TOKEN' \
   -F 'url=https://www.bseindia.com/downloads/ipo/Final%20Fund%20Raising%20Document_LOLT_060820262008.pdf' \
   -F 'sections=all'
 ```
@@ -111,7 +121,7 @@ Get the complete JSON analysis with this request:
 curl --fail http://localhost:8000/v1/analyses/ANALYSIS_ID
 ```
 
-The API does not require an application bearer token. Control access at the network or HTTPS proxy layer if you publish the service.
+Only `POST /v1/analyze` uses bearer-token authentication. The report pages, analysis list, status API, result API, documentation, and health endpoint remain public. This lets a Telegram user open an analysis URL without a token.
 
 ## Source limits
 

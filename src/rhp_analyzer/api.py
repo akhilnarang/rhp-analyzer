@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import secrets
 import tempfile
 import time
 from collections.abc import AsyncIterator
@@ -24,6 +25,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import HTMLResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import HttpUrl
 
@@ -39,6 +41,11 @@ from .config import Settings, get_settings
 from .service import AnalysisService
 
 logger = logging.getLogger("uvicorn.error")
+bearer_auth = HTTPBearer(
+    auto_error=False,
+    scheme_name="RHPBearerAuth",
+    description="Bearer token for POST /v1/analyze.",
+)
 
 
 def schedule_analysis(app: FastAPI, analysis_id: str) -> None:
@@ -56,6 +63,29 @@ def schedule_analysis(app: FastAPI, analysis_id: str) -> None:
 
 async def get_request_base_url(request: Request) -> str:
     return str(request.base_url).rstrip("/")
+
+
+async def require_analyze_auth(
+    request: Request,
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None,
+        Depends(bearer_auth),
+    ],
+) -> None:
+    configured_tokens = request.app.state.settings.api_tokens()
+    if not configured_tokens:
+        return
+    supplied_token = credentials.credentials if credentials is not None else ""
+    valid = any(
+        secrets.compare_digest(supplied_token, configured_token)
+        for configured_token in configured_tokens
+    )
+    if not valid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="The bearer token is not valid.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 def safe_filename(value: str | None) -> str:
@@ -288,6 +318,7 @@ def create_app(
     async def analyze(
         request: Request,
         response: Response,
+        _authorization: Annotated[None, Depends(require_analyze_auth)],
         request_base_url: Annotated[str, Depends(get_request_base_url)],
         file: Annotated[
             UploadFile | None,

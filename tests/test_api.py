@@ -250,6 +250,53 @@ class ApiTests(TestCase):
 
         asyncio.run(scenario())
 
+    def test_only_analyze_post_requires_bearer_token(self) -> None:
+        async def scenario() -> None:
+            self.app.state.settings.rhp_api_tokens = SecretStr(
+                "token-one,token-two"
+            )
+            payload = b"%PDF-1.4\ntest\n%%EOF"
+            try:
+                async with AsyncClient(
+                    transport=ASGITransport(app=self.app),
+                    base_url="http://test",
+                ) as client:
+                    missing = await client.post(
+                        "/v1/analyze",
+                        files={
+                            "file": ("issuer.pdf", payload, "application/pdf")
+                        },
+                        data={"sections": "offer"},
+                    )
+                    wrong = await client.post(
+                        "/v1/analyze",
+                        headers={"Authorization": "Bearer wrong-token"},
+                        files={
+                            "file": ("issuer.pdf", payload, "application/pdf")
+                        },
+                        data={"sections": "offer"},
+                    )
+                    allowed = await client.post(
+                        "/v1/analyze",
+                        headers={"Authorization": "Bearer token-two"},
+                        files={
+                            "file": ("issuer.pdf", payload, "application/pdf")
+                        },
+                        data={"sections": "offer"},
+                    )
+                    public_page = await client.get("/analysis")
+                    public_health = await client.get("/health")
+            finally:
+                self.app.state.settings.rhp_api_tokens = None
+            self.assertEqual(missing.status_code, 401)
+            self.assertEqual(missing.headers["www-authenticate"], "Bearer")
+            self.assertEqual(wrong.status_code, 401)
+            self.assertEqual(allowed.status_code, 202)
+            self.assertEqual(public_page.status_code, 200)
+            self.assertEqual(public_health.status_code, 200)
+
+        asyncio.run(scenario())
+
     def test_remote_pdf_host_must_be_allowed(self) -> None:
         async def scenario() -> None:
             async with AsyncClient(
@@ -312,7 +359,15 @@ class ApiTests(TestCase):
         self.assertIn("/v1/analyses/{analysis_id}", schema["paths"])
         self.assertIn("/v1/analyses/{analysis_id}/status", schema["paths"])
         self.assertIn("/analysis/{analysis_id}", schema["paths"])
-        self.assertNotIn("securitySchemes", schema.get("components", {}))
+        self.assertIn("RHPBearerAuth", schema["components"]["securitySchemes"])
+        self.assertEqual(
+            schema["paths"]["/v1/analyze"]["post"]["security"],
+            [{"RHPBearerAuth": []}],
+        )
+        self.assertNotIn(
+            "security",
+            schema["paths"]["/v1/analyses/{analysis_id}"]["get"],
+        )
         body_schema = schema["paths"]["/v1/analyze"]["post"]["requestBody"]["content"][
             "multipart/form-data"
         ]["schema"]
