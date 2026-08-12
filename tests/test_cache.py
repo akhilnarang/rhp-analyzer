@@ -1,6 +1,8 @@
+import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
+from unittest.mock import patch
 
 from rhp_analyzer.cache import CacheStore, canonical_hash
 
@@ -37,6 +39,27 @@ class CacheTests(TestCase):
                 metadata={"usage": {"requests": 1}},
             )
             self.assertEqual(cache.get_report("report")["report_markdown"], "# Report")
+
+    def test_cache_operations_close_database_connections(self) -> None:
+        with TemporaryDirectory() as directory:
+            cache = CacheStore(Path(directory) / "cache.sqlite3")
+            connections: list[sqlite3.Connection] = []
+            sqlite_connect = sqlite3.connect
+
+            def connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+                connection = sqlite_connect(*args, **kwargs)
+                connections.append(connection)
+                return connection
+
+            with patch("rhp_analyzer.cache.sqlite3.connect", side_effect=connect):
+                cache.initialize()
+                for _ in range(10):
+                    self.assertEqual(cache.pending_job_ids(), [])
+
+            self.assertEqual(len(connections), 11)
+            for connection in connections:
+                with self.assertRaises(sqlite3.ProgrammingError):
+                    connection.execute("SELECT 1")
 
     def test_analysis_job_round_trip(self) -> None:
         with TemporaryDirectory() as directory:
