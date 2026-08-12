@@ -14,7 +14,7 @@
           <span class="badge job-status" data-variant="{{ job.variant }}">{{ job.status_label }}</span>
         </header>
         <p>{{ job.summary }}</p>
-        <small class="job-meta">Updated {{ job.updated_label }}</small>
+        <small class="job-meta">Updated <time data-local-time datetime="{{ job.updated_at }}">{{ job.updated_label }}</time></small>
         <footer>
           <a class="button outline small" href="{{ url_for('analysis_page_route', analysis_id=job.public_id) }}">View analysis</a>
         </footer>

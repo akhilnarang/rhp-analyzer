@@ -46,7 +46,7 @@
         <header class="report-header">
           <h1 class="report-title">{{ report_title }}</h1>
           <p class="report-summary">{{ report_description }}</p>
-          <time class="text-light" datetime="{{ analysis.metadata.created_at }}">{{ report_date }}</time>
+          <time class="text-light" data-local-time datetime="{{ analysis.metadata.created_at }}">{{ report_date }}</time>
         </header>
         <article class="report" itemprop="articleBody">{{ report_body_html | safe }}</article>
       </section>

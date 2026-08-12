@@ -226,6 +226,13 @@ class ApiTests(TestCase):
                     len(html.find("hr", **{"class": "report-conclusion-divider"})),
                     1,
                 )
+                local_times = [
+                    attrs
+                    for tag, attrs in html.elements
+                    if tag == "time" and "data-local-time" in attrs
+                ]
+                self.assertEqual(len(local_times), 1)
+                self.assertRegex(str(local_times[0].get("datetime")), r"^\d{4}-\d{2}-\d{2}T")
 
                 analysis_list = await client.get("/analysis")
                 self.assertEqual(analysis_list.status_code, 200)
