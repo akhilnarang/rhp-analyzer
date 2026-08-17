@@ -102,6 +102,7 @@ class CacheStore:
                     analysis_id TEXT PRIMARY KEY,
                     public_slug TEXT,
                     public_slug_version INTEGER NOT NULL DEFAULT 2,
+                    company_name TEXT,
                     extraction_key TEXT NOT NULL,
                     pdf_sha256 TEXT NOT NULL,
                     filename TEXT NOT NULL,
@@ -133,9 +134,15 @@ class CacheStore:
                     "ALTER TABLE analysis_jobs "
                     "ADD COLUMN market_data_json TEXT NOT NULL DEFAULT '{}'"
                 )
+            if "company_name" not in job_columns:
+                connection.execute(
+                    "ALTER TABLE analysis_jobs ADD COLUMN company_name TEXT"
+                )
             needs_slug_migration = "public_slug_version" not in job_columns
             if "public_slug" not in job_columns:
-                connection.execute("ALTER TABLE analysis_jobs ADD COLUMN public_slug TEXT")
+                connection.execute(
+                    "ALTER TABLE analysis_jobs ADD COLUMN public_slug TEXT"
+                )
             if needs_slug_migration:
                 connection.execute(
                     "ALTER TABLE analysis_jobs ADD COLUMN "
@@ -403,6 +410,18 @@ class CacheStore:
                     utc_now(),
                     analysis_id,
                 ),
+            )
+
+    def update_job_company_name(
+        self, analysis_id: str, company_name: str | None
+    ) -> None:
+        """Store the checked issuer name for public pages."""
+
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE analysis_jobs SET company_name = ?, updated_at = ? "
+                "WHERE analysis_id = ?",
+                (company_name, utc_now(), analysis_id),
             )
 
     def get_extraction(self, cache_key: str) -> dict[str, Any] | None:

@@ -30,4 +30,3 @@ class PdfTextTests(TestCase):
         self.assertEqual(pages, ["page one", "page two"])
         self.assertEqual(captured["timeout"], PDF_PARSE_TIMEOUT_SECONDS)
         self.assertTrue(captured["start_new_session"])
-

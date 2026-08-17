@@ -22,6 +22,7 @@ SECTION_SPECS: tuple[SectionSpec, ...] = (
         aliases=("THE OFFER", "THE ISSUE"),
         max_pages=18,
         questions=(
+            "company_name: Give the issuer's exact legal company name as printed on the cover page. Return only the name.",
             "offer_structure: Give the fresh issue and OFS parts.",
             "issue_size: Give the total issue size and currency unit.",
             "price_band: Give the price band or issue price.",

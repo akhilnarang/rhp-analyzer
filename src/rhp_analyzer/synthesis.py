@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from typing import Any
 
 from pydantic_ai import Agent
@@ -14,7 +15,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from .benchmark import _json_safe
 from .config import get_settings
 
-REPORT_PROMPT_VERSION = "rhp-report-v4"
+REPORT_PROMPT_VERSION = "rhp-report-v5"
 
 REPORT_INSTRUCTIONS = """\
 Act as an Indian IPO research analyst.
@@ -42,6 +43,8 @@ Source rules:
 
 Report rules:
 - Use Markdown only.
+- Start with exactly `# {company name} — IPO Research Report`. Use the checked
+  `company_name` value. Do not use a section name or a generic title.
 - Use 1,200 to 1,800 words when the source has sufficient data.
 - Use small tables for comparisons.
 - Do not repeat the same item in different sections.
@@ -128,6 +131,54 @@ def verified_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return cleaned
 
 
+def clean_company_name(value: str | None) -> str | None:
+    """Return a legal issuer name or reject an unsafe display title."""
+
+    if value is None:
+        return None
+    name = re.sub(r"\s+", " ", value).strip().strip("*_`# ")
+    name = re.sub(r"(?i)^company\s*:\s*", "", name).strip()
+    name = re.sub(
+        r"(?i)\s+(?:[—–-]\s+)?(?:(?:RHP|DRHP|IPO)\s+)?"
+        r"(?:research\s+)?(?:report|analysis)\s*$",
+        "",
+        name,
+    ).strip()
+    if not name or len(name) > 200 or name.startswith(tuple("0123456789")):
+        return None
+    if name.casefold() in {
+        "company",
+        "executive summary",
+        "ipo",
+        "ipo research report",
+        "report",
+        "rhp",
+        "rhp analysis",
+        "drhp",
+        "drhp analysis",
+    }:
+        return None
+    if re.search(r"(?i)\b(?:limited|ltd\.?)$", name) is None:
+        return None
+    return name
+
+
+def company_name_from_records(records: list[dict[str, Any]]) -> str | None:
+    """Read the issuer name from locally checked extraction records."""
+
+    for record in verified_records(records):
+        for answer in (record.get("output") or {}).get("answers", []):
+            if (
+                answer.get("question_id") == "company_name"
+                and answer.get("status") == "found"
+                and answer.get("evidence")
+            ):
+                name = clean_company_name(answer.get("answer"))
+                if name is not None:
+                    return name
+    return None
+
+
 async def synthesize_report(
     records: list[dict[str, Any]],
     *,
@@ -152,12 +203,15 @@ async def synthesize_report(
             timeout=600,
         ),
     )
+    checked_records = verified_records(records)
+    company_name = company_name_from_records(records)
     prompt = (
         "Write the final report from the checked records below. "
         "Do not restore evidence that the local check removed.\n\n"
+        f"CHECKED_COMPANY_NAME: {company_name or 'Not available'}\n\n"
         "USER_PROVIDED_MARKET_DATA:\n"
         f"{json.dumps(market_data or {}, ensure_ascii=False)}\n\n"
-        f"CHECKED_RECORDS:\n{json.dumps(verified_records(records), ensure_ascii=False)}"
+        f"CHECKED_RECORDS:\n{json.dumps(checked_records, ensure_ascii=False)}"
     )
     result = await agent.run(prompt)
     return result.output, _json_safe(result.usage)

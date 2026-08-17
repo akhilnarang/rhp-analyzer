@@ -42,7 +42,7 @@ Rules:
 - Copy each evidence quote as one continuous text string.
 """
 
-EXTRACTION_PROMPT_VERSION = "rhp-extraction-v4"
+EXTRACTION_PROMPT_VERSION = "rhp-extraction-v5"
 
 
 def build_section_prompt(document_name: str, spec: SectionSpec, content: str) -> str:

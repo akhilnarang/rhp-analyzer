@@ -28,9 +28,7 @@ class HtmlProbe(HTMLParser):
         super().__init__()
         self.elements: list[tuple[str, dict[str, str | None]]] = []
 
-    def handle_starttag(
-        self, tag: str, attrs: list[tuple[str, str | None]]
-    ) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self.elements.append((tag, dict(attrs)))
 
     handle_startendtag = handle_starttag
@@ -77,7 +75,23 @@ class FakePipeline:
                     "evidence_items": 1,
                     "verified_evidence": 1,
                 },
-                "output": {"answers": [], "material_risks": []},
+                "output": {
+                    "answers": [
+                        {
+                            "question_id": "company_name",
+                            "status": "found",
+                            "answer": "Test Issuer Limited",
+                            "confidence": "high",
+                            "evidence": [
+                                {
+                                    "pdf_page": 1,
+                                    "quote": "TEST ISSUER LIMITED",
+                                }
+                            ],
+                        }
+                    ],
+                    "material_risks": [],
+                },
             }
         ]
 
@@ -180,15 +194,15 @@ class ApiTests(TestCase):
                     f"/analysis/{full_analysis_id}", follow_redirects=False
                 )
                 self.assertEqual(legacy_page.status_code, 308)
-                self.assertTrue(legacy_page.headers["location"].endswith(first_body["url"]))
+                self.assertTrue(
+                    legacy_page.headers["location"].endswith(first_body["url"])
+                )
 
                 page = await client.get(first_body["url"])
                 self.assertEqual(page.status_code, 200)
                 html = HtmlProbe()
                 html.feed(page.text)
-                self.assertEqual(
-                    len(html.find("h1", **{"class": "report-title"})), 1
-                )
+                self.assertEqual(len(html.find("h1", **{"class": "report-title"})), 1)
                 self.assertEqual(
                     len(html.find("section", **{"data-instant-view": "article"})),
                     1,
@@ -232,11 +246,13 @@ class ApiTests(TestCase):
                     if tag == "time" and "data-local-time" in attrs
                 ]
                 self.assertEqual(len(local_times), 1)
-                self.assertRegex(str(local_times[0].get("datetime")), r"^\d{4}-\d{2}-\d{2}T")
+                self.assertRegex(
+                    str(local_times[0].get("datetime")), r"^\d{4}-\d{2}-\d{2}T"
+                )
 
                 analysis_list = await client.get("/analysis")
                 self.assertEqual(analysis_list.status_code, 200)
-                self.assertIn("Report", analysis_list.text)
+                self.assertIn("Test Issuer Limited", analysis_list.text)
                 self.assertIn("Ready", analysis_list.text)
                 self.assertIn("View analysis", analysis_list.text)
                 self.assertIn(f"/analysis/{analysis_id}", analysis_list.text)
@@ -384,9 +400,7 @@ class ApiTests(TestCase):
 
     def test_only_analyze_post_requires_bearer_token(self) -> None:
         async def scenario() -> None:
-            self.app.state.settings.rhp_api_tokens = SecretStr(
-                "token-one,token-two"
-            )
+            self.app.state.settings.rhp_api_tokens = SecretStr("token-one,token-two")
             payload = b"%PDF-1.4\ntest\n%%EOF"
             try:
                 async with AsyncClient(
@@ -395,25 +409,19 @@ class ApiTests(TestCase):
                 ) as client:
                     missing = await client.post(
                         "/v1/analyze",
-                        files={
-                            "file": ("issuer.pdf", payload, "application/pdf")
-                        },
+                        files={"file": ("issuer.pdf", payload, "application/pdf")},
                         data={"sections": "offer"},
                     )
                     wrong = await client.post(
                         "/v1/analyze",
                         headers={"Authorization": "Bearer wrong-token"},
-                        files={
-                            "file": ("issuer.pdf", payload, "application/pdf")
-                        },
+                        files={"file": ("issuer.pdf", payload, "application/pdf")},
                         data={"sections": "offer"},
                     )
                     allowed = await client.post(
                         "/v1/analyze",
                         headers={"Authorization": "Bearer token-two"},
-                        files={
-                            "file": ("issuer.pdf", payload, "application/pdf")
-                        },
+                        files={"file": ("issuer.pdf", payload, "application/pdf")},
                         data={"sections": "offer"},
                     )
                     public_page = await client.get("/analysis")
@@ -456,10 +464,13 @@ class ApiTests(TestCase):
             transport = httpx.MockTransport(
                 lambda _request: httpx.Response(403, content=b"refused")
             )
-            with patch(
-                "rhp_analyzer.api.public_internet_transport",
-                return_value=transport,
-            ), self.assertRaises(HTTPException) as raised:
+            with (
+                patch(
+                    "rhp_analyzer.api.public_internet_transport",
+                    return_value=transport,
+                ),
+                self.assertRaises(HTTPException) as raised,
+            ):
                 await persist_remote_pdf(
                     HttpUrl("https://documents.example/offer.pdf"),
                     max_bytes=1_000_000,
@@ -562,6 +573,21 @@ class ApiTests(TestCase):
             ),
         }
         self.assertEqual(analysis_title(job), "Milky Mist Dairy Food Limited")
+
+    def test_analysis_title_prefers_the_checked_company_name(self) -> None:
+        job = {
+            "filename": "opaque.pdf",
+            "company_name": "Credent Connect N Care Limited",
+            "report_markdown": "# 1. Executive Summary",
+        }
+        self.assertEqual(analysis_title(job), "Credent Connect N Care Limited")
+
+    def test_analysis_title_rejects_a_generic_report_heading(self) -> None:
+        job = {
+            "filename": "opaque.pdf",
+            "report_markdown": "# IPO\n\n## Executive Summary",
+        }
+        self.assertEqual(analysis_title(job), "opaque.pdf")
 
     def test_openapi_has_the_analysis_routes(self) -> None:
         schema = self.app.openapi()

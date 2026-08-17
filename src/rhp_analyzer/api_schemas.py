@@ -29,6 +29,7 @@ class PdfMetadata(BaseModel):
 
 
 class AnalysisMetadata(BaseModel):
+    company_name: str | None = None
     model: str
     sections: list[str]
     extraction_prompt_version: str

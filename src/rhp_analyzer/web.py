@@ -12,6 +12,7 @@ from markdown_it.token import Token
 from starlette.templating import Jinja2Templates
 
 from .api_schemas import AnalysisResponse
+from .synthesis import clean_company_name
 
 PACKAGE_DIRECTORY = Path(__file__).parent
 STATIC_DIRECTORY = PACKAGE_DIRECTORY / "static"
@@ -24,6 +25,9 @@ markdown = MarkdownIt("commonmark", {"html": False}).enable("table")
 
 
 def analysis_title(job: dict[str, Any]) -> str:
+    company_name = clean_company_name(str(job.get("company_name") or ""))
+    if company_name is not None:
+        return company_name
     report = str(job.get("report_markdown") or "")
     match = re.search(r"^#\s+(.+?)\s*$", report, flags=re.MULTILINE)
     if match is None:
@@ -36,7 +40,7 @@ def analysis_title(job: dict[str, Any]) -> str:
         title,
         flags=re.IGNORECASE,
     )
-    return title or str(job["filename"])
+    return clean_company_name(title) or str(job["filename"])
 
 
 def analysis_list_items(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -146,9 +150,7 @@ def report_content(
             divider = Token("hr", "hr", 0)
             divider.attrs["class"] = "report-conclusion-divider"
             rendered_tokens.append(divider)
-        contents.append(
-            {"id": heading_id, "title": title, "level": int(token.tag[1])}
-        )
+        contents.append({"id": heading_id, "title": title, "level": int(token.tag[1])})
         rendered_tokens.append(token)
 
     return markdown.renderer.render(rendered_tokens, markdown.options, {}), contents

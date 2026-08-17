@@ -87,10 +87,12 @@ class CacheTests(TestCase):
                 message="Completed section: offer.",
                 completed_sections=1,
             )
+            cache.update_job_company_name("analysis", "Issuer Industries Limited")
             job = cache.get_job("analysis")
             self.assertEqual(job["status"], "running")
             self.assertEqual(job["completed_sections"], 1)
             self.assertEqual(job["market_data"], {"gmp": "₹39"})
+            self.assertEqual(job["company_name"], "Issuer Industries Limited")
             self.assertEqual(cache.pending_job_ids(), ["analysis"])
             listed_job = cache.list_jobs()[0]
             self.assertEqual(listed_job["analysis_id"], "analysis")

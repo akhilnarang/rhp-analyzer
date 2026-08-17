@@ -13,7 +13,11 @@ from .api_schemas import AnalysisResponse, UsageSummary
 from .benchmark import EXTRACTION_PROMPT_VERSION, run_text_sections
 from .cache import CacheStore, canonical_hash
 from .pdf_text import SECTION_SPECS
-from .synthesis import REPORT_PROMPT_VERSION, synthesize_report
+from .synthesis import (
+    REPORT_PROMPT_VERSION,
+    company_name_from_records,
+    synthesize_report,
+)
 
 Extractor = Callable[..., Awaitable[list[dict[str, Any]]]]
 Synthesizer = Callable[..., Awaitable[tuple[str, dict[str, Any]]]]
@@ -141,7 +145,8 @@ class AnalysisService:
             sections=sections,
             market_data=market_data,
         )
-        if self.get_cached(analysis_id) is not None:
+        cached = self.get_cached(analysis_id)
+        if cached is not None:
             self.cache.put_job(
                 analysis_id=analysis_id,
                 extraction_key=extraction_key,
@@ -154,6 +159,9 @@ class AnalysisService:
                 market_data=market_data,
                 pdf_path=None,
                 status="completed",
+            )
+            self.cache.update_job_company_name(
+                analysis_id, cached.metadata.company_name
             )
             pdf_path.unlink(missing_ok=True)
             return analysis_id, False
@@ -232,7 +240,7 @@ class AnalysisService:
 
         remove_pdf = True
         try:
-            await self.analyze(
+            analysis = await self.analyze(
                 pdf_path,
                 filename=job["filename"],
                 pdf_sha256=job["pdf_sha256"],
@@ -267,6 +275,9 @@ class AnalysisService:
                 clear_pdf_path=True,
             )
         else:
+            self.cache.update_job_company_name(
+                analysis_id, analysis.metadata.company_name
+            )
             self.cache.update_job(
                 analysis_id,
                 status="completed",
@@ -459,6 +470,7 @@ class AnalysisService:
                 "elapsed_seconds": round(time.monotonic() - synthesis_started, 3),
                 "usage": summarize_usage(synthesis_raw_usage),
                 "market_data": parameters["market_data"],
+                "company_name": company_name_from_records(extraction["records"]),
             }
             report = self.cache.put_report(
                 cache_key=report_key,
@@ -483,6 +495,9 @@ class AnalysisService:
             {} if extraction_hit else extraction_usage,
             {} if report_hit else report_usage,
         )
+        company_name = report["metadata"].get("company_name")
+        if company_name is None:
+            company_name = company_name_from_records(extraction["records"])
         return AnalysisResponse.model_validate(
             {
                 "analysis_id": report_key,
@@ -500,6 +515,7 @@ class AnalysisService:
                 "report_markdown": report["report_markdown"],
                 "section_records": extraction["records"],
                 "metadata": {
+                    "company_name": company_name,
                     "model": parameters["model"],
                     "sections": parameters["sections"],
                     "extraction_prompt_version": EXTRACTION_PROMPT_VERSION,
@@ -529,6 +545,9 @@ class AnalysisService:
             extraction["metadata"]["usage"],
             report["metadata"]["usage"],
         )
+        company_name = report["metadata"].get("company_name")
+        if company_name is None:
+            company_name = company_name_from_records(extraction["records"])
         return AnalysisResponse.model_validate(
             {
                 "analysis_id": analysis_id,
@@ -546,6 +565,7 @@ class AnalysisService:
                 "report_markdown": report["report_markdown"],
                 "section_records": extraction["records"],
                 "metadata": {
+                    "company_name": company_name,
                     "model": extraction["model"],
                     "sections": extraction["sections"],
                     "extraction_prompt_version": extraction["prompt_version"],

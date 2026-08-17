@@ -352,9 +352,7 @@ async def persist_remote_pdf(
         )
         raise HTTPException(
             status_code=status.HTTP_424_FAILED_DEPENDENCY,
-            detail=(
-                "The service could not download the PDF. Upload the PDF instead."
-            ),
+            detail=("The service could not download the PDF. Upload the PDF instead."),
         ) from exc
 
 
@@ -595,9 +593,7 @@ def create_app(
         response_class=HTMLResponse,
         name="analysis_page_route",
     )
-    async def analysis_page_route(
-        analysis_id: str, request: Request
-    ) -> Response:
+    async def analysis_page_route(analysis_id: str, request: Request) -> Response:
         service: AnalysisService = request.app.state.analysis_service
         job = service.get_job_status(analysis_id)
         if job is None:
@@ -606,9 +602,7 @@ def create_app(
         short_analysis_id = service.public_analysis_id(full_analysis_id)
         if analysis_id != short_analysis_id:
             return RedirectResponse(
-                request.url_for(
-                    "analysis_page_route", analysis_id=short_analysis_id
-                ),
+                request.url_for("analysis_page_route", analysis_id=short_analysis_id),
                 status_code=status.HTTP_308_PERMANENT_REDIRECT,
             )
         analysis = (
@@ -620,6 +614,7 @@ def create_app(
             web.analysis_title(
                 {
                     "filename": job.get("filename", "RHP analysis"),
+                    "company_name": job.get("company_name"),
                     "report_markdown": analysis.report_markdown,
                 }
             )
