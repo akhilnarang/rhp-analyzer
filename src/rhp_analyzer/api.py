@@ -39,6 +39,11 @@ from .api_schemas import (
     AnalysisStatusResponse,
     HealthResponse,
 )
+from .archive import (
+    ArchiveError,
+    ArchiveLimitError,
+    extract_prospectus_from_zip,
+)
 from .cache import CacheStore
 from .config import Settings, get_settings
 from .service import AnalysisService
@@ -82,15 +87,15 @@ async def resolve_public_addresses(host: str, port: int) -> list[str]:
                 type=socket.SOCK_STREAM,
             )
     except TimeoutError as exc:
-        raise UnsafeRemoteAddress("The PDF URL host lookup timed out.") from exc
+        raise UnsafeRemoteAddress("The source URL host lookup timed out.") from exc
     except socket.gaierror as exc:
-        raise UnsafeRemoteAddress("The PDF URL host could not be resolved.") from exc
+        raise UnsafeRemoteAddress("The source URL host could not be resolved.") from exc
     addresses = list(dict.fromkeys(answer[4][0] for answer in answers))
     if not addresses or any(
         not ipaddress.ip_address(address).is_global for address in addresses
     ):
         raise UnsafeRemoteAddress(
-            "The PDF URL must resolve only to public internet addresses."
+            "The source URL must resolve only to public internet addresses."
         )
     return addresses[:8]
 
@@ -131,7 +136,7 @@ class PublicInternetBackend(httpcore.AsyncNetworkBackend):
         timeout: float | None = None,
         socket_options: object = None,
     ) -> httpcore.AsyncNetworkStream:
-        raise UnsafeRemoteAddress("Unix sockets are not valid PDF URL targets.")
+        raise UnsafeRemoteAddress("Unix sockets are not valid source URL targets.")
 
     async def sleep(self, seconds: float) -> None:
         await self._backend.sleep(seconds)
@@ -187,17 +192,53 @@ def safe_filename(value: str | None) -> str:
     return (value or "upload.pdf").replace("\\", "/").rsplit("/", 1)[-1]
 
 
+async def prepare_pdf_source(
+    path: Path,
+    *,
+    filename: str,
+    first_bytes: bytes,
+    sha256: str,
+    size: int,
+    max_bytes: int,
+) -> tuple[Path, str, int, str]:
+    """Return a PDF directly or select a checked PDF from a ZIP."""
+
+    if first_bytes == b"%PDF-":
+        return path, sha256, size, safe_filename(filename)
+    if first_bytes[:2] != b"PK":
+        raise HTTPException(
+            status_code=415,
+            detail="The source is not a PDF or ZIP file.",
+        )
+    try:
+        result = await asyncio.to_thread(
+            extract_prospectus_from_zip,
+            path,
+            max_pdf_bytes=max_bytes,
+        )
+    except ArchiveLimitError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=str(exc),
+        ) from exc
+    except ArchiveError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        path.unlink(missing_ok=True)
+    return result.path, result.sha256, result.size, result.filename
+
+
 async def persist_upload(
     upload: UploadFile,
     *,
     max_bytes: int,
-) -> tuple[Path, str, int]:
+) -> tuple[Path, str, int, str]:
     digest = hashlib.sha256()
     size = 0
     first_bytes = b""
     path: Path | None = None
     try:
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as temporary:
+        with tempfile.NamedTemporaryFile(suffix=".input", delete=False) as temporary:
             path = Path(temporary.name)
             while chunk := await upload.read(1024 * 1024):
                 if not first_bytes:
@@ -206,16 +247,21 @@ async def persist_upload(
                 if size > max_bytes:
                     raise HTTPException(
                         status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-                        detail=f"The PDF is larger than the {max_bytes}-byte limit.",
+                        detail=f"The source is larger than the {max_bytes}-byte limit.",
                     )
                 digest.update(chunk)
                 temporary.write(chunk)
         if size == 0:
             raise HTTPException(status_code=400, detail="The file is empty.")
-        if first_bytes != b"%PDF-":
-            raise HTTPException(status_code=415, detail="The file is not a PDF.")
         assert path is not None
-        return path, digest.hexdigest(), size
+        return await prepare_pdf_source(
+            path,
+            filename=safe_filename(upload.filename),
+            first_bytes=first_bytes,
+            sha256=digest.hexdigest(),
+            size=size,
+            max_bytes=max_bytes,
+        )
     except BaseException:
         if path is not None:
             path.unlink(missing_ok=True)
@@ -226,12 +272,12 @@ def validate_remote_url(url: httpx.URL) -> None:
     if url.scheme not in {"http", "https"} or not url.host:
         raise HTTPException(
             status_code=422,
-            detail="The PDF URL must use HTTP or HTTPS.",
+            detail="The source URL must use HTTP or HTTPS.",
         )
     if url.userinfo:
         raise HTTPException(
             status_code=422,
-            detail="The PDF URL must not contain user information.",
+            detail="The source URL must not contain user information.",
         )
 
 
@@ -242,7 +288,7 @@ async def persist_remote_pdf(
 ) -> tuple[Path, str, int, str]:
     current_url = httpx.URL(str(source_url))
     headers = {
-        "Accept": "application/pdf",
+        "Accept": "application/pdf, application/zip, application/octet-stream",
         "User-Agent": "RHP-Analyzer/0.1",
     }
     path: Path | None = None
@@ -263,8 +309,8 @@ async def persist_remote_pdf(
                             raise HTTPException(
                                 status_code=status.HTTP_424_FAILED_DEPENDENCY,
                                 detail=(
-                                    "The PDF server returned an invalid redirect. "
-                                    "Upload the PDF instead."
+                                    "The source server returned an invalid redirect. "
+                                    "Upload the PDF or ZIP instead."
                                 ),
                             )
                         current_url = response.url.join(location)
@@ -273,28 +319,31 @@ async def persist_remote_pdf(
                         response.raise_for_status()
                     except httpx.HTTPStatusError as exc:
                         logger.warning(
-                            "PDF download refused: host=%s status=%d",
+                            "Source download refused: host=%s status=%d",
                             current_url.host,
                             response.status_code,
                         )
                         raise HTTPException(
                             status_code=status.HTTP_424_FAILED_DEPENDENCY,
                             detail=(
-                                "The PDF server refused the download with "
-                                f"HTTP {response.status_code}. Upload the PDF instead."
+                                "The source server refused the download with "
+                                f"HTTP {response.status_code}. "
+                                "Upload the PDF or ZIP instead."
                             ),
                         ) from exc
                     content_length = response.headers.get("content-length")
                     if content_length and int(content_length) > max_bytes:
                         raise HTTPException(
                             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-                            detail=f"The PDF is larger than the {max_bytes}-byte limit.",
+                            detail=(
+                                f"The source is larger than the {max_bytes}-byte limit."
+                            ),
                         )
                     digest = hashlib.sha256()
                     size = 0
                     first_bytes = b""
                     with tempfile.NamedTemporaryFile(
-                        suffix=".pdf",
+                        suffix=".input",
                         delete=False,
                     ) as temporary:
                         path = Path(temporary.name)
@@ -306,7 +355,7 @@ async def persist_remote_pdf(
                                 raise HTTPException(
                                     status_code=status.HTTP_413_CONTENT_TOO_LARGE,
                                     detail=(
-                                        "The PDF is larger than the "
+                                        "The source is larger than the "
                                         f"{max_bytes}-byte limit."
                                     ),
                                 )
@@ -316,22 +365,24 @@ async def persist_remote_pdf(
                         raise HTTPException(
                             status_code=status.HTTP_424_FAILED_DEPENDENCY,
                             detail=(
-                                "The PDF server returned an empty file. "
-                                "Upload the PDF instead."
+                                "The source server returned an empty file. "
+                                "Upload the PDF or ZIP instead."
                             ),
                         )
-                    if first_bytes != b"%PDF-":
-                        raise HTTPException(
-                            status_code=415,
-                            detail="The remote file is not a PDF.",
-                        )
                     filename = safe_filename(unquote(Path(current_url.path).name))
-                    return path, digest.hexdigest(), size, filename
+                    return await prepare_pdf_source(
+                        path,
+                        filename=filename,
+                        first_bytes=first_bytes,
+                        sha256=digest.hexdigest(),
+                        size=size,
+                        max_bytes=max_bytes,
+                    )
             raise HTTPException(
                 status_code=status.HTTP_424_FAILED_DEPENDENCY,
                 detail=(
-                    "The PDF server returned too many redirects. "
-                    "Upload the PDF instead."
+                    "The source server returned too many redirects. "
+                    "Upload the PDF or ZIP instead."
                 ),
             )
     except HTTPException:
@@ -346,13 +397,16 @@ async def persist_remote_pdf(
         if path is not None:
             path.unlink(missing_ok=True)
         logger.warning(
-            "PDF download failed: host=%s error=%s",
+            "Source download failed: host=%s error=%s",
             current_url.host,
             type(exc).__name__,
         )
         raise HTTPException(
             status_code=status.HTTP_424_FAILED_DEPENDENCY,
-            detail=("The service could not download the PDF. Upload the PDF instead."),
+            detail=(
+                "The service could not download the source. "
+                "Upload the PDF or ZIP instead."
+            ),
         ) from exc
 
 
@@ -450,11 +504,11 @@ def create_app(
         request_base_url: Annotated[str, Depends(get_request_base_url)],
         file: Annotated[
             UploadFile | None,
-            File(description="RHP or DRHP PDF file."),
+            File(description="RHP or DRHP PDF file, or a ZIP that contains one."),
         ] = None,
         url: Annotated[
             HttpUrl | None,
-            Form(description="Public URL for an RHP or DRHP PDF file."),
+            Form(description="Public URL for an RHP or DRHP PDF or ZIP file."),
         ] = None,
         sections: Annotated[str | None, Form()] = None,
         lot_size: Annotated[str | None, Form(max_length=100)] = None,
@@ -477,7 +531,7 @@ def create_app(
         if (file is None) == (url is None):
             raise HTTPException(
                 status_code=422,
-                detail="Send one PDF source. Use either file or url.",
+                detail="Send one PDF or ZIP source. Use either file or url.",
             )
         parsed_sections = parse_sections(sections, service)
         market_data = collect_market_data(
@@ -507,7 +561,7 @@ def create_app(
         path: Path | None = None
         try:
             if file is not None:
-                path, checksum, size = await persist_upload(
+                path, checksum, size, filename = await persist_upload(
                     file,
                     max_bytes=app_settings.rhp_max_pdf_bytes,
                 )
@@ -518,7 +572,7 @@ def create_app(
                     max_bytes=app_settings.rhp_max_pdf_bytes,
                 )
             logger.info(
-                "PDF upload complete: file=%s bytes=%d sha256=%s",
+                "PDF source ready: file=%s bytes=%d sha256=%s",
                 filename,
                 size,
                 checksum,

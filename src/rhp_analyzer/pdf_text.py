@@ -114,6 +114,8 @@ SECTION_SPECS: tuple[SectionSpec, ...] = (
 
 PDF_PARSE_TIMEOUT_SECONDS = 120
 MAX_EXTRACTED_TEXT_BYTES = 200_000_000
+PDF_SAMPLE_PAGES = 8
+MAX_PDF_SAMPLE_TEXT_BYTES = 4_000_000
 
 
 def limit_pdf_parser() -> None:
@@ -123,6 +125,19 @@ def limit_pdf_parser() -> None:
     resource.setrlimit(resource.RLIMIT_CPU, (90, 90))
     resource.setrlimit(resource.RLIMIT_AS, (1_500_000_000, 1_500_000_000))
     resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_EXTRACTED_TEXT_BYTES,) * 2)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+
+
+def limit_pdf_sample_parser() -> None:
+    """Set smaller limits for the archive PDF content check."""
+
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    resource.setrlimit(resource.RLIMIT_CPU, (30, 30))
+    resource.setrlimit(resource.RLIMIT_AS, (1_500_000_000, 1_500_000_000))
+    resource.setrlimit(
+        resource.RLIMIT_FSIZE,
+        (MAX_PDF_SAMPLE_TEXT_BYTES * 2,) * 2,
+    )
     resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
 
 
@@ -178,6 +193,68 @@ def extract_pages(pdf_path: Path) -> list[str]:
         text = output.read(MAX_EXTRACTED_TEXT_BYTES + 1)
     if len(text) > MAX_EXTRACTED_TEXT_BYTES:
         raise ValueError("The PDF produces too much extracted text.")
+    pages = text.decode("utf-8", errors="replace").split("\f")
+    if pages and not pages[-1].strip():
+        pages.pop()
+    return pages
+
+
+def extract_pdf_sample(pdf_path: Path) -> list[str]:
+    """Read the first PDF pages in the parser sandbox."""
+
+    source_path = pdf_path.resolve(strict=True)
+    command = [
+        "/usr/bin/bwrap",
+        "--unshare-all",
+        "--die-with-parent",
+        "--new-session",
+        "--clearenv",
+        "--ro-bind",
+        "/usr",
+        "/usr",
+        "--symlink",
+        "usr/lib",
+        "/lib",
+        "--symlink",
+        "usr/lib",
+        "/lib64",
+        "--dir",
+        "/tmp",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--ro-bind",
+        str(source_path),
+        "/input.pdf",
+        "/usr/bin/pdftotext",
+        "-q",
+        "-f",
+        "1",
+        "-l",
+        str(PDF_SAMPLE_PAGES),
+        "-layout",
+        "/input.pdf",
+        "-",
+    ]
+    with tempfile.TemporaryFile() as output:
+        subprocess.run(
+            command,
+            check=True,
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=subprocess.PIPE,
+            timeout=PDF_PARSE_TIMEOUT_SECONDS,
+            preexec_fn=limit_pdf_sample_parser,
+            start_new_session=True,
+        )
+        size = output.tell()
+        if size > MAX_PDF_SAMPLE_TEXT_BYTES:
+            raise ValueError("The PDF sample produces too much text.")
+        output.seek(0)
+        text = output.read(MAX_PDF_SAMPLE_TEXT_BYTES + 1)
+    if len(text) > MAX_PDF_SAMPLE_TEXT_BYTES:
+        raise ValueError("The PDF sample produces too much text.")
     pages = text.decode("utf-8", errors="replace").split("\f")
     if pages and not pages[-1].strip():
         pages.pop()

@@ -71,9 +71,9 @@ systemctl --user daemon-reload
 systemctl --user enable --now rhp-analyzer.service
 ```
 
-## Analyze a PDF
+## Analyze a PDF or ZIP
 
-Send a PDF to `POST /v1/analyze`.
+Send a PDF or ZIP to `POST /v1/analyze`.
 
 ```bash
 curl -X POST http://localhost:8000/v1/analyze \
@@ -107,7 +107,7 @@ curl -X POST http://localhost:8000/v1/analyze \
 
 You can also send `employee_subscription`. Each market field is optional. Each value has a 100-character limit. The report labels these values as user-provided market data. It does not present them as PDF facts.
 
-You can send a public PDF URL instead of a file:
+You can send a public PDF or ZIP URL instead of a file:
 
 ```bash
 curl -X POST http://localhost:8000/v1/analyze \
@@ -118,7 +118,11 @@ curl -X POST http://localhost:8000/v1/analyze \
 
 Send either `file` or `url`. Do not send both fields in one request.
 
-The service accepts an HTTP or HTTPS PDF URL from any public internet host. It checks the address for the first request and for every redirect. It blocks local, private, link-local, reserved, and metadata-service addresses. It pins each connection to a checked public address.
+The service accepts an HTTP or HTTPS PDF or ZIP URL from any public internet host. It checks the address for the first request and for every redirect. It blocks local, private, link-local, reserved, and metadata-service addresses. It pins each connection to a checked public address.
+
+For a ZIP, the service checks every archive entry before extraction. It rejects unsafe paths, duplicate paths, links, special files, encrypted files, too many entries, too many PDFs, large expanded sizes, and unsafe compression ratios. It then extracts each PDF to a temporary file inside a Bubblewrap sandbox. It does not write archive member paths to the file system.
+
+The service checks the first pages of every PDF. It identifies an RHP, DRHP, or final prospectus from the document title and offer text. It does not trust the ZIP path or PDF filename. It prefers one RHP over a final prospectus or DRHP. It rejects the ZIP when no offer document is found or when several documents have the same highest priority.
 
 Some document sites block cloud-server downloads. The API returns `424 Failed Dependency` when the source site refuses or fails the download. Upload the PDF file in this case.
 
@@ -173,17 +177,17 @@ Only `POST /v1/analyze` uses bearer-token authentication. The report pages, anal
 
 ## Source limits
 
-The PDF source must contain PDF data. The route also accepts the optional market fields shown above. The PDF extraction does not use this data. Only the final report uses it.
+The source must contain PDF or ZIP data. A ZIP must contain one content-verified offer document. The route also accepts the optional market fields shown above. The PDF extraction does not use this data. Only the final report uses it.
 
 The report uses only facts from the PDF. It identifies a value as not available when the PDF does not contain it.
 
-The default file-size limit is 50,000,000 bytes. Set `RHP_MAX_PDF_BYTES` to change this limit.
+The default source and PDF size limit is 50,000,000 bytes. Set `RHP_MAX_PDF_BYTES` to change this limit. A ZIP can contain up to 1,000 entries and 20 PDFs. Its total expanded size cannot exceed five times the PDF limit.
 
-The service runs the PDF parser in a Bubblewrap sandbox. The parser has no network access. It cannot read the `.env` file or application files. It can read only system libraries and the current PDF. It sees a new minimal device directory. CPU, memory, output-size, file, process, and time limits also apply. The production systemd unit blocks privilege changes and limits memory and task use. The service runs as the unprivileged deployment user.
+The service runs ZIP extraction and PDF parsing in Bubblewrap sandboxes. These processes have no network access. They cannot read the `.env` file or application files. Each process can read only system libraries and its current input file. It sees a new minimal device directory. CPU, memory, output-size, file, process, and time limits also apply. The production systemd unit blocks privilege changes and limits memory and task use. The service runs as the unprivileged deployment user.
 
 ## Cache operation
 
-The service calculates the SHA-256 checksum during the upload or download. It uses SQLite to store jobs, progress, section records, and reports.
+The service calculates the SHA-256 checksum of the selected PDF. It uses SQLite to store jobs, progress, section records, and reports.
 
 The default database file is `data/rhp-cache.sqlite3`. Set `RHP_DATABASE_PATH` to use a different file.
 

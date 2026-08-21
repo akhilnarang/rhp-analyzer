@@ -1,5 +1,8 @@
 import asyncio
+import hashlib
+import io
 import re
+import zipfile
 from html.parser import HTMLParser
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -17,6 +20,7 @@ from rhp_analyzer.api import (
     persist_remote_pdf,
     resolve_public_addresses,
 )
+from rhp_analyzer.archive import ExtractedPdf
 from rhp_analyzer.cache import CacheStore
 from rhp_analyzer.config import Settings
 from rhp_analyzer.service import AnalysisService
@@ -334,6 +338,56 @@ class ApiTests(TestCase):
                     files={"file": ("fake.pdf", b"not a pdf", "application/pdf")},
                 )
             self.assertEqual(response.status_code, 415)
+
+        asyncio.run(scenario())
+
+    def test_zip_upload_uses_the_content_verified_pdf(self) -> None:
+        async def scenario() -> None:
+            archive_bytes = io.BytesIO()
+            with zipfile.ZipFile(archive_bytes, "w") as archive:
+                archive.writestr("misleading-name.pdf", b"not used")
+            selected_path = Path(self.temporary.name) / "selected.pdf"
+            selected_data = b"%PDF-1.4\nselected offer\n%%EOF"
+            selected_path.write_bytes(selected_data)
+            selected = ExtractedPdf(
+                path=selected_path,
+                filename="Actual Issuer Limited RHP.pdf",
+                size=len(selected_data),
+                sha256=hashlib.sha256(selected_data).hexdigest(),
+            )
+            with patch(
+                "rhp_analyzer.api.asyncio.to_thread",
+                AsyncMock(return_value=selected),
+            ):
+                async with AsyncClient(
+                    transport=ASGITransport(app=self.app),
+                    base_url="http://test",
+                ) as client:
+                    response = await client.post(
+                        "/v1/analyze",
+                        files={
+                            "file": (
+                                "archive.zip",
+                                archive_bytes.getvalue(),
+                                "application/zip",
+                            )
+                        },
+                        data={"sections": "offer"},
+                    )
+            self.assertEqual(response.status_code, 202)
+            self.assertTrue(response.json()["url"].endswith("/actual-issuer-limited"))
+            analysis_id = response.json()["url"].rsplit("/", 1)[-1]
+            async with AsyncClient(
+                transport=ASGITransport(app=self.app),
+                base_url="http://test",
+            ) as client:
+                for _ in range(20):
+                    current = await client.get(f"/v1/analyses/{analysis_id}/status")
+                    if current.json()["status"] == "completed":
+                        break
+                    await asyncio.sleep(0.01)
+                else:
+                    self.fail("The ZIP analysis job did not finish.")
 
         asyncio.run(scenario())
 
