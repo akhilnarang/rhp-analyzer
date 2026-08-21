@@ -83,6 +83,41 @@ def question_ids(spec: SectionSpec) -> set[str]:
     return {question.split(":", 1)[0] for question in spec.questions}
 
 
+def validate_section_output(
+    output: SectionAnalysis,
+    expected_question_ids: set[str],
+) -> SectionAnalysis:
+    """Check required answers and discard extra model-generated answers."""
+
+    unexpected = sorted(
+        {
+            answer.question_id
+            for answer in output.answers
+            if answer.question_id not in expected_question_ids
+        }
+    )
+    if unexpected:
+        logger.warning(
+            "Discarding unexpected section answers: question_ids=%s",
+            ",".join(unexpected),
+        )
+        output = output.model_copy(
+            update={
+                "answers": [
+                    answer
+                    for answer in output.answers
+                    if answer.question_id in expected_question_ids
+                ]
+            }
+        )
+    _validate_semantics(output)
+    actual_question_ids = {answer.question_id for answer in output.answers}
+    missing = sorted(expected_question_ids - actual_question_ids)
+    if missing:
+        raise ValueError(f"Answer each question one time. Missing: {missing}.")
+    return output
+
+
 def make_agent(
     model: str,
     retries: int,
@@ -112,18 +147,9 @@ def make_agent(
     @agent.output_validator
     def validate_output(output: SectionAnalysis) -> SectionAnalysis:
         try:
-            _validate_semantics(output)
-            actual_question_ids = {answer.question_id for answer in output.answers}
-            if actual_question_ids != expected_question_ids:
-                missing = sorted(expected_question_ids - actual_question_ids)
-                unexpected = sorted(actual_question_ids - expected_question_ids)
-                raise ValueError(
-                    "Answer each question one time. "
-                    f"Missing: {missing}. Unexpected: {unexpected}."
-                )
+            return validate_section_output(output, expected_question_ids)
         except ValueError as exc:
             raise ModelRetry(str(exc)) from exc
-        return output
 
     return agent
 

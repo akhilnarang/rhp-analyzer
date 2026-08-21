@@ -8,6 +8,7 @@ from rhp_analyzer.benchmark import (
     _validate_semantics,
     run_text_sections,
     score_evidence,
+    validate_section_output,
 )
 from rhp_analyzer.pdf_text import (
     SECTION_SPECS,
@@ -82,6 +83,42 @@ class EvidenceScoringTests(TestCase):
         )
         with self.assertRaisesRegex(ValueError, "continuous source text"):
             _validate_semantics(output)
+
+    def test_unexpected_answers_are_discarded(self) -> None:
+        output = SectionAnalysis(
+            document_name="example.pdf",
+            section_name="offer",
+            answers=[
+                Answer(
+                    question_id="offer_structure",
+                    status="not_found",
+                    answer="Not found.",
+                    confidence="low",
+                ),
+                Answer(
+                    question_id="company_strengths",
+                    status="not_found",
+                    answer="Not requested.",
+                    confidence="low",
+                ),
+            ],
+        )
+
+        checked = validate_section_output(output, {"offer_structure"})
+
+        self.assertEqual(
+            [answer.question_id for answer in checked.answers],
+            ["offer_structure"],
+        )
+
+    def test_missing_answers_still_fail_validation(self) -> None:
+        output = SectionAnalysis(
+            document_name="example.pdf",
+            section_name="offer",
+            answers=[],
+        )
+        with self.assertRaisesRegex(ValueError, "offer_structure"):
+            validate_section_output(output, {"offer_structure"})
 
 
 class ConcurrentExtractionTests(TestCase):
