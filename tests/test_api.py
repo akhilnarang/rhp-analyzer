@@ -166,11 +166,11 @@ class ApiTests(TestCase):
                 self.assertEqual(first.status_code, 202)
                 first_body = first.json()
                 self.assertEqual(first.headers["location"], first_body["url"])
-                analysis_id = first_body["url"].rsplit("/", 1)[-1]
-                self.assertEqual(analysis_id, "shiprocket-limited")
+                provisional_id = first_body["url"].rsplit("/", 1)[-1]
+                self.assertEqual(provisional_id, "shiprocket-limited")
                 for _ in range(20):
                     status_response = await client.get(
-                        f"/v1/analyses/{analysis_id}/status"
+                        f"/v1/analyses/{provisional_id}/status"
                     )
                     if status_response.json()["status"] == "completed":
                         break
@@ -185,13 +185,14 @@ class ApiTests(TestCase):
                 )
                 self.assertEqual(second.status_code, 202)
                 second_body = second.json()
-                self.assertEqual(second_body["url"], first_body["url"])
+                canonical_id = second_body["url"].rsplit("/", 1)[-1]
+                self.assertEqual(canonical_id, "test-issuer-limited")
                 self.assertEqual(self.pipeline.extractions, 1)
                 self.assertEqual(self.pipeline.syntheses, 1)
 
-                fetched = await client.get(f"/v1/analyses/{analysis_id}")
+                fetched = await client.get(f"/v1/analyses/{provisional_id}")
                 self.assertEqual(fetched.status_code, 200)
-                self.assertEqual(fetched.json()["analysis_id"], analysis_id)
+                self.assertEqual(fetched.json()["analysis_id"], canonical_id)
                 full_analysis_id = fetched.json()["cache"]["report_key"]
 
                 legacy_page = await client.get(
@@ -199,10 +200,18 @@ class ApiTests(TestCase):
                 )
                 self.assertEqual(legacy_page.status_code, 308)
                 self.assertTrue(
-                    legacy_page.headers["location"].endswith(first_body["url"])
+                    legacy_page.headers["location"].endswith(second_body["url"])
                 )
 
-                page = await client.get(first_body["url"])
+                provisional_page = await client.get(
+                    first_body["url"], follow_redirects=False
+                )
+                self.assertEqual(provisional_page.status_code, 308)
+                self.assertTrue(
+                    provisional_page.headers["location"].endswith(second_body["url"])
+                )
+
+                page = await client.get(second_body["url"])
                 self.assertEqual(page.status_code, 200)
                 html = HtmlProbe()
                 html.feed(page.text)
@@ -259,7 +268,7 @@ class ApiTests(TestCase):
                 self.assertIn("Test Issuer Limited", analysis_list.text)
                 self.assertIn("Ready", analysis_list.text)
                 self.assertIn("View analysis", analysis_list.text)
-                self.assertIn(f"/analysis/{analysis_id}", analysis_list.text)
+                self.assertIn(f"/analysis/{canonical_id}", analysis_list.text)
 
         asyncio.run(scenario())
 
@@ -283,7 +292,7 @@ class ApiTests(TestCase):
                 )
                 analysis_url = response.json()["url"]
                 for _ in range(20):
-                    page = await client.get(analysis_url)
+                    page = await client.get(analysis_url, follow_redirects=True)
                     if "Plain report text." in page.text:
                         break
                     await asyncio.sleep(0.01)

@@ -134,10 +134,15 @@ The API calculates the checksum and creates a job. It then returns `202 Accepted
 }
 ```
 
-The public URL uses a cleaned form of the PDF filename. For example,
-`Molbio Diagnostics Limited - Red Herring Prospectus.PDF` becomes
-`/analysis/molbio-diagnostics-limited`. If two analyses need the same slug, the
-newer one gets a short hash suffix. Existing hash URLs redirect to the public URL.
+The API first makes a temporary URL from the PDF file name. It removes prospectus
+markers, a version number after the marker, and a date at the end. For example,
+`RHP-V6-Sumax-17.08.2026.pdf` becomes `/analysis/sumax` while the job runs.
+
+After extraction, the service uses the checked company name for the main URL. In this
+example, `SUMAX ENGINEERING LIMITED` becomes
+`/analysis/sumax-engineering-limited`. Old and temporary URLs continue to work. They
+redirect to the main URL. If two analyses need the same slug, the newer analysis gets
+a short hash suffix.
 
 The response also has a `Location` header with the same URL. A Telegram bot can send this URL to the user at once.
 
@@ -201,7 +206,8 @@ The extraction cache key contains these values:
 
 The report cache key also contains the report model, report prompt version, and optional market data.
 
-The service returns the same analysis URL after a full cache hit. It does not call the model again.
+After a full cache hit, the service returns the existing main analysis URL. It does
+not call the model again.
 
 The service stores a queued PDF in `data/uploads/`. It deletes the PDF after the job completes or fails. SQLite does not contain the PDF data.
 

@@ -12,25 +12,49 @@ from pathlib import Path
 from typing import Any
 
 LEGACY_ANALYSIS_PREFIX_LENGTH = 12
-PUBLIC_SLUG_VERSION = 2
+PUBLIC_SLUG_VERSION = 3
+
+
+def _slugify(value: str) -> str:
+    value = unicodedata.normalize("NFKD", value)
+    value = value.encode("ascii", "ignore").decode("ascii").lower()
+    value = value.replace("&", " and ")
+    return re.sub(r"[^a-z0-9]+", "-", value).strip("-") or "analysis"
+
+
+def company_slug(company_name: str) -> str:
+    """Make a public slug from a checked company name."""
+
+    return _slugify(company_name)
 
 
 def analysis_slug(filename: str) -> str:
-    """Make a stable public slug from a prospectus filename."""
+    """Make a temporary public slug from a prospectus file name."""
 
     name = Path(filename).stem
     name = re.sub(r"(?i)^registration[_-]?\d+[_-]?", "", name)
     name = re.sub(
-        r"(?i)[\s_-]+(?:(?:draft[\s_-]+)?red[\s_-]+herring[\s_-]+prospectus|"
-        r"drhp|rhp|prospectus)(?:[\s_-].*)?$",
+        r"(?ix)^(?:(?:final|draft)[\s_.-]*)?"
+        r"(?:red[\s_.-]*herring[\s_.-]*prospectus|drhp|rhp|prospectus)"
+        r"[\s_.-]*(?:v(?:ersion)?[\s_.-]*\d+[\s_.-]*)?",
+        "",
+        name,
+    )
+    name = re.sub(
+        r"(?i)[\s_.-]+(?:(?:draft[\s_.-]+)?red[\s_.-]+herring[\s_.-]+prospectus|"
+        r"drhp|rhp|prospectus)(?:[\s_.-].*)?$",
         "",
         name,
     )
     name = re.sub(r"(?i)(?:drhp|rhp)$", "", name)
-    name = unicodedata.normalize("NFKD", name)
-    name = name.encode("ascii", "ignore").decode("ascii").lower()
-    name = name.replace("&", " and ")
-    return re.sub(r"[^a-z0-9]+", "-", name).strip("-") or "analysis"
+    name = re.sub(
+        r"[\s_.-]+(?:(?:0?[1-9]|[12]\d|3[01])[\s_.-]+"
+        r"(?:0?[1-9]|1[0-2])[\s_.-]+(?:19|20)\d{2})"
+        r"(?:[\s_.-]+\d+)?$",
+        "",
+        name,
+    )
+    return _slugify(name)
 
 
 def utc_now() -> str:
@@ -101,7 +125,7 @@ class CacheStore:
                 CREATE TABLE IF NOT EXISTS analysis_jobs (
                     analysis_id TEXT PRIMARY KEY,
                     public_slug TEXT,
-                    public_slug_version INTEGER NOT NULL DEFAULT 2,
+                    public_slug_version INTEGER NOT NULL DEFAULT 3,
                     company_name TEXT,
                     extraction_key TEXT NOT NULL,
                     pdf_sha256 TEXT NOT NULL,
@@ -123,6 +147,15 @@ class CacheStore:
                 );
                 CREATE INDEX IF NOT EXISTS analysis_job_status_idx
                     ON analysis_jobs(status);
+
+                CREATE TABLE IF NOT EXISTS analysis_job_slug_aliases (
+                    public_slug TEXT PRIMARY KEY,
+                    analysis_id TEXT NOT NULL,
+                    FOREIGN KEY(analysis_id) REFERENCES analysis_jobs(analysis_id)
+                        ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS analysis_job_slug_alias_analysis_idx
+                    ON analysis_job_slug_aliases(analysis_id);
                 """
             )
             job_columns = {
@@ -149,9 +182,16 @@ class CacheStore:
                     "public_slug_version INTEGER NOT NULL DEFAULT 1"
                 )
                 connection.execute("DROP INDEX IF EXISTS analysis_job_public_slug_idx")
+            connection.execute(
+                "INSERT OR IGNORE INTO analysis_job_slug_aliases "
+                "(public_slug, analysis_id) "
+                "SELECT public_slug, analysis_id FROM analysis_jobs "
+                "WHERE public_slug IS NOT NULL AND public_slug != ''"
+            )
             used_slugs: set[str] = set()
             rows = connection.execute(
-                "SELECT analysis_id, filename, public_slug, public_slug_version "
+                "SELECT analysis_id, filename, company_name, public_slug, "
+                "public_slug_version "
                 "FROM analysis_jobs "
                 "ORDER BY created_at"
             ).fetchall()
@@ -165,6 +205,7 @@ class CacheStore:
                     public_slug = self._available_public_slug(
                         connection,
                         filename=str(row["filename"]),
+                        company_name=row["company_name"],
                         analysis_id=str(row["analysis_id"]),
                         used_slugs=used_slugs,
                     )
@@ -174,6 +215,11 @@ class CacheStore:
                         "WHERE analysis_id = ?",
                         (public_slug, PUBLIC_SLUG_VERSION, row["analysis_id"]),
                     )
+                connection.execute(
+                    "INSERT OR IGNORE INTO analysis_job_slug_aliases "
+                    "(public_slug, analysis_id) VALUES (?, ?)",
+                    (public_slug, row["analysis_id"]),
+                )
                 used_slugs.add(public_slug)
             connection.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS analysis_job_public_slug_idx "
@@ -201,6 +247,13 @@ class CacheStore:
                 "SELECT * FROM analysis_jobs WHERE public_slug = ?",
                 (public_slug,),
             ).fetchone()
+            if row is None:
+                row = connection.execute(
+                    "SELECT analysis_jobs.* FROM analysis_job_slug_aliases "
+                    "JOIN analysis_jobs USING (analysis_id) "
+                    "WHERE analysis_job_slug_aliases.public_slug = ?",
+                    (public_slug,),
+                ).fetchone()
         return None if row is None else self._decode_job(row)
 
     def resolve_analysis_id(self, analysis_id: str) -> str | None:
@@ -256,18 +309,21 @@ class CacheStore:
         connection: sqlite3.Connection,
         *,
         filename: str,
+        company_name: str | None = None,
         analysis_id: str,
         used_slugs: set[str] | None = None,
     ) -> str:
-        base = analysis_slug(filename)
+        base = company_slug(company_name) if company_name else analysis_slug(filename)
         reserved = used_slugs or set()
 
         def is_available(candidate: str) -> bool:
             if candidate in reserved:
                 return False
             row = connection.execute(
-                "SELECT analysis_id FROM analysis_jobs WHERE public_slug = ?",
-                (candidate,),
+                "SELECT analysis_id FROM analysis_jobs WHERE public_slug = ? "
+                "UNION SELECT analysis_id FROM analysis_job_slug_aliases "
+                "WHERE public_slug = ? LIMIT 1",
+                (candidate, candidate),
             ).fetchone()
             return row is None or row["analysis_id"] == analysis_id
 
@@ -376,6 +432,11 @@ class CacheStore:
                     now,
                 ),
             )
+            connection.execute(
+                "INSERT OR IGNORE INTO analysis_job_slug_aliases "
+                "(public_slug, analysis_id) VALUES (?, ?)",
+                (public_slug, analysis_id),
+            )
         result = self.get_job(analysis_id)
         assert result is not None
         return result
@@ -415,14 +476,47 @@ class CacheStore:
     def update_job_company_name(
         self, analysis_id: str, company_name: str | None
     ) -> None:
-        """Store the checked issuer name for public pages."""
+        """Store the checked company name and use it for the main slug."""
 
         with self._connect() as connection:
+            job = connection.execute(
+                "SELECT filename, public_slug FROM analysis_jobs WHERE analysis_id = ?",
+                (analysis_id,),
+            ).fetchone()
+            if job is None:
+                return
+            public_slug = str(job["public_slug"] or "")
+            if public_slug:
+                connection.execute(
+                    "INSERT OR IGNORE INTO analysis_job_slug_aliases "
+                    "(public_slug, analysis_id) VALUES (?, ?)",
+                    (public_slug, analysis_id),
+                )
+            if company_name:
+                public_slug = self._available_public_slug(
+                    connection,
+                    filename=str(job["filename"]),
+                    company_name=company_name,
+                    analysis_id=analysis_id,
+                )
             connection.execute(
-                "UPDATE analysis_jobs SET company_name = ?, updated_at = ? "
+                "UPDATE analysis_jobs SET company_name = ?, public_slug = ?, "
+                "public_slug_version = ?, updated_at = ? "
                 "WHERE analysis_id = ?",
-                (company_name, utc_now(), analysis_id),
+                (
+                    company_name,
+                    public_slug,
+                    PUBLIC_SLUG_VERSION,
+                    utc_now(),
+                    analysis_id,
+                ),
             )
+            if public_slug:
+                connection.execute(
+                    "INSERT OR IGNORE INTO analysis_job_slug_aliases "
+                    "(public_slug, analysis_id) VALUES (?, ?)",
+                    (public_slug, analysis_id),
+                )
 
     def get_extraction(self, cache_key: str) -> dict[str, Any] | None:
         with self._connect() as connection:
