@@ -15,6 +15,7 @@
       <a class="brand" href="{{ url_for('home') }}">RHP Analyzer</a>
       <div class="hstack nav-links">
         {% block nav_detail %}{% endblock %}
+        <a href="{{ url_for('allotment_page') }}">Allotment</a>
         <a href="{{ url_for('analysis_list') }}">Analyses</a>
         <a href="{{ url_for('swagger_ui_html') }}">API</a>
       </div>

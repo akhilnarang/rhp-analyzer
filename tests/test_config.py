@@ -16,7 +16,22 @@ class SettingsTests(TestCase):
         self.assertEqual(settings.rhp_max_pdf_bytes, 50_000_000)
         self.assertEqual(settings.rhp_section_concurrency, 4)
         self.assertEqual(settings.rhp_job_concurrency, 1)
+        self.assertEqual(settings.ipo_allotment_timeout_seconds, 15.0)
+        self.assertEqual(settings.ipo_allotment_catalogue_ttl_seconds, 300)
         self.assertEqual(settings.api_tokens(), set())
+
+    def test_allotment_settings_use_ipo_environment_names(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "IPO_ALLOTMENT_TIMEOUT_SECONDS": "7.5",
+                "IPO_ALLOTMENT_CATALOGUE_TTL_SECONDS": "120",
+            },
+            clear=True,
+        ):
+            settings = Settings(_env_file=None)
+        self.assertEqual(settings.ipo_allotment_timeout_seconds, 7.5)
+        self.assertEqual(settings.ipo_allotment_catalogue_ttl_seconds, 120)
 
     def test_api_tokens_are_parsed_and_masked(self) -> None:
         settings = Settings(

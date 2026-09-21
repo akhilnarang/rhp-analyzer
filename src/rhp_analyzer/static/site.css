@@ -345,3 +345,81 @@ body > main {
     margin-block-start: var(--space-4);
   }
 }
+
+.allotment-form {
+  display: grid;
+  gap: var(--space-5);
+  max-width: 680px;
+  margin-block: var(--space-8);
+}
+
+.allotment-form .form-group {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.allotment-form select[multiple],
+.allotment-form select[size] {
+  min-height: 12rem;
+}
+
+.challenge-panel {
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-medium);
+  background: var(--card);
+}
+
+.challenge-panel img {
+  display: block;
+  max-width: 100%;
+  margin-block: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+}
+
+.allotment-error {
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--danger, #b42318);
+  border-radius: var(--radius-medium);
+  color: var(--danger, #b42318);
+}
+
+.allotment-result {
+  display: grid;
+  gap: var(--space-3);
+  margin-block: var(--space-8);
+  overflow-wrap: anywhere;
+}
+
+.allotment-outcome[data-outcome="allotted"] {
+  color: var(--success, #1a7f37);
+}
+
+.allotment-outcome[data-outcome="not_allotted"],
+.allotment-outcome[data-outcome="not_found"] {
+  color: var(--muted-foreground);
+}
+
+.allotment-outcome[data-outcome="rate_limited"],
+.allotment-outcome[data-outcome="provider_unavailable"],
+.allotment-outcome[data-outcome="upstream_changed"],
+.allotment-outcome[data-outcome="upstream_error"] {
+  color: var(--warning, #9a6700);
+}
+
+.allotment-result table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.allotment-result th,
+.allotment-result td {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  text-align: start;
+}
+
+.allotment-providers {
+  margin-block: var(--space-10);
+}
