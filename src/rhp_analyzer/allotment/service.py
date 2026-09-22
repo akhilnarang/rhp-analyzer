@@ -142,7 +142,7 @@ class AllotmentService:
                     errors[provider.name] = _error_text(result)
                 else:
                     issues.extend(result)
-            issues.sort(key=lambda issue: issue.company_name.lower())
+            # Keep each registrar's own order; do not re-sort the catalogue.
             self._catalogue = (
                 now + self._catalogue_ttl_seconds,
                 issues,

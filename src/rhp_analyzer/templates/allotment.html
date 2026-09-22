@@ -15,8 +15,11 @@
       <input
         id="company-filter"
         type="search"
-        placeholder="Filter by company or issuer name"
+        placeholder="Search by company or issuer name"
       >
+      <select id="provider-filter" aria-label="Filter by registrar">
+        <option value="">All registrars</option>
+      </select>
       <select id="issue-select" name="issue_id" required size="8"></select>
       <small class="text-light" id="issue-meta"></small>
     </div>
@@ -81,6 +84,7 @@
 <script>
 const form = document.getElementById("allotment-form");
 const filter = document.getElementById("company-filter");
+const providerFilter = document.getElementById("provider-filter");
 const select = document.getElementById("issue-select");
 const meta = document.getElementById("issue-meta");
 const panInput = document.getElementById("pan-input");
@@ -126,8 +130,10 @@ function selectedIssue() {
 
 function renderOptions() {
   const needle = filter.value.trim().toLowerCase();
+  const provider = providerFilter.value;
   select.replaceChildren();
   for (const issue of issues) {
+    if (provider && issue.provider !== provider) continue;
     const haystack = (issue.company_name + " " + issue.provider_label).toLowerCase();
     if (needle && !haystack.includes(needle)) continue;
     const option = document.createElement("option");
@@ -161,6 +167,15 @@ async function loadIssues() {
     const data = await response.json();
     issues = data.issues || [];
     byId = new Map(issues.map((issue) => [issue.issue_id, issue]));
+    const seen = new Set();
+    for (const issue of issues) {
+      if (seen.has(issue.provider_label)) continue;
+      seen.add(issue.provider_label);
+      const option = document.createElement("option");
+      option.value = issue.provider;
+      option.textContent = issue.provider_label;
+      providerFilter.append(option);
+    }
     renderOptions();
     if (!issues.length) {
       showError("No registrar catalogues are available right now.");
@@ -340,6 +355,7 @@ challengeRefresh.addEventListener("click", () => {
 
 select.addEventListener("change", updateSelection);
 filter.addEventListener("input", renderOptions);
+providerFilter.addEventListener("change", renderOptions);
 loadIssues();
 </script>
 {% endblock %}

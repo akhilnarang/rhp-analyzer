@@ -36,7 +36,7 @@ The allotment subsystem is strictly decoupled from the PDF analysis pipeline:
 1. **Issue Catalogue Aggregation**:
    - The user loads `/allotment` or calls `GET /v1/allotment/issues`.
    - `AllotmentService` queries all four registrars concurrently using `asyncio.gather`.
-   - Discovered issues are combined into a sorted catalogue and cached in memory for `IPO_ALLOTMENT_CATALOGUE_TTL_SECONDS` (default: 300 seconds).
+   - Discovered issues are combined into one catalogue. Each registrar's own ordering is preserved, and the catalogue is cached in memory for `IPO_ALLOTMENT_CATALOGUE_TTL_SECONDS` (default: 300 seconds).
    - If an individual registrar fails or times out during catalogue refresh, its error is recorded in provider status while remaining registrars continue to serve results.
 2. **Challenge Initiation** (Bigshare only):
    - Bigshare requires a visual CAPTCHA answer for every lookup.

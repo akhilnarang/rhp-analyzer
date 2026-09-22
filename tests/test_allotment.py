@@ -166,6 +166,10 @@ class AllotmentTests(TestCase):
                 {issue["issue_id"] for issue in catalogue.json()["issues"]},
                 {"kfintech:101", "mufg:202", "bigshare:303", "purva:404"},
             )
+            self.assertEqual(
+                [issue["provider"] for issue in catalogue.json()["issues"]],
+                ["kfintech", "mufg", "bigshare", "purva"],
+            )
             self.assertEqual(lookup.json()["outcome"], "allotted")
             self.assertEqual(lookup.json()["allocated_shares"], 50)
             self.assertNotIn(PAN, lookup.text)
