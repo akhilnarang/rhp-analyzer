@@ -5,13 +5,13 @@
 <section class="page-shell">
   <h1>IPO allotment status</h1>
   <p class="text-light">
-    Select the issue, enter the applicant PAN, and the service asks the
-    registrar directly. The PAN is never stored or sent to a model.
+    Select one or more issues (Ctrl/Cmd-click on desktop), enter one PAN or several separated by commas, and the service asks the
+    registrar directly. PANs are never stored or sent to a model.
   </p>
 
   <form id="allotment-form" class="allotment-form" autocomplete="off">
     <div class="form-group">
-      <label for="company-filter">Company or IPO</label>
+      <label for="company-filter">Companies or IPOs</label>
       <input
         id="company-filter"
         type="search"
@@ -20,41 +20,22 @@
       <select id="provider-filter" aria-label="Filter by registrar">
         <option value="">All registrars</option>
       </select>
-      <select id="issue-select" name="issue_id" required size="8"></select>
+      <select id="issue-select" name="issue_id" multiple size="8"></select>
       <small class="text-light" id="issue-meta"></small>
     </div>
     <div class="form-group">
-      <label for="pan-input">Applicant PAN</label>
+      <label for="pan-input">Applicant PANs</label>
       <input
         id="pan-input"
         name="pan"
         type="text"
         required
-        maxlength="10"
-        minlength="10"
-        pattern="[A-Za-z]{5}[0-9]{4}[A-Za-z]{1}"
-        placeholder="ABCDE1234F"
+        pattern="\s*[A-Za-z]{5}[0-9]{4}[A-Za-z]([\s,]+[A-Za-z]{5}[0-9]{4}[A-Za-z])*[\s,]*"
+        title="One PAN, or several separated by commas"
+        placeholder="ABCDE1234F, PQRST5678Z"
         autocapitalize="characters"
         spellcheck="false"
       >
-    </div>
-    <div id="challenge-panel" class="challenge-panel" hidden>
-      <p id="challenge-message" class="text-light">
-        Enter the characters shown in the image.
-      </p>
-      <img id="challenge-image" alt="Registrar CAPTCHA challenge">
-      <div class="hstack">
-        <input
-          id="challenge-answer"
-          type="text"
-          maxlength="16"
-          autocomplete="off"
-          placeholder="CAPTCHA answer"
-        >
-        <button id="challenge-refresh" class="button outline" type="button">
-          New image
-        </button>
-      </div>
     </div>
     <nav class="hstack">
       <button id="lookup-button" class="button" type="submit">Check status</button>
@@ -63,7 +44,7 @@
   </form>
 
   <p id="allotment-error" class="allotment-error" role="alert" hidden></p>
-  <section id="allotment-result" class="allotment-result" hidden></section>
+  <div id="allotment-results"></div>
 
   <section class="allotment-providers">
     <h3>Registrars</h3>
@@ -89,16 +70,13 @@ const select = document.getElementById("issue-select");
 const meta = document.getElementById("issue-meta");
 const panInput = document.getElementById("pan-input");
 const errorBox = document.getElementById("allotment-error");
-const resultBox = document.getElementById("allotment-result");
-const challengePanel = document.getElementById("challenge-panel");
-const challengeImage = document.getElementById("challenge-image");
-const challengeAnswer = document.getElementById("challenge-answer");
-const challengeRefresh = document.getElementById("challenge-refresh");
+const resultsBox = document.getElementById("allotment-results");
 const lookupButton = document.getElementById("lookup-button");
 
 let issues = [];
 let byId = new Map();
-let challengeToken = null;
+// Selected issue ids survive filtering, which rebuilds the option list.
+const chosen = new Set();
 
 const outcomeLabels = {
   allotted: "Allotted",
@@ -124,10 +102,6 @@ function showError(message) {
   errorBox.hidden = false;
 }
 
-function selectedIssue() {
-  return byId.get(select.value) || null;
-}
-
 function renderOptions() {
   const needle = filter.value.trim().toLowerCase();
   const provider = providerFilter.value;
@@ -138,24 +112,30 @@ function renderOptions() {
     if (needle && !haystack.includes(needle)) continue;
     const option = document.createElement("option");
     option.value = issue.issue_id;
+    option.selected = chosen.has(issue.issue_id);
     const closeLabel = issue.close_date ? " — closes " + issue.close_date : "";
     option.textContent = issue.company_name + closeLabel + " — " + issue.provider_label;
     select.append(option);
   }
-  updateSelection();
+  updateMeta();
 }
 
 function updateSelection() {
-  challengeToken = null;
-  challengePanel.hidden = true;
-  const issue = selectedIssue();
-  meta.textContent = issue
-    ? issue.requires_challenge
-      ? "This registrar asks for a CAPTCHA before every lookup."
-      : issue.close_date
-        ? "Closes " + issue.close_date + "; registrar: " + issue.provider_label + "."
-        : "Registrar: " + issue.provider_label + "."
-    : "No issue selected.";
+  for (const option of select.options) {
+    if (option.selected) chosen.add(option.value);
+    else chosen.delete(option.value);
+  }
+  updateMeta();
+}
+
+function updateMeta() {
+  const selected = [...chosen].map((id) => byId.get(id)).filter(Boolean);
+  if (!selected.length) {
+    meta.textContent = "No issue selected.";
+    return;
+  }
+  const names = selected.map((issue) => issue.company_name).join(", ");
+  meta.textContent = selected.length + " selected: " + names;
 }
 
 async function loadIssues() {
@@ -185,28 +165,16 @@ async function loadIssues() {
   }
 }
 
-async function requestChallenge() {
-  const issue = selectedIssue();
-  if (!issue) return;
-  clearError();
-  const response = await fetch("/v1/allotment/challenge", {
+async function postJson(url, body) {
+  const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ issue_id: issue.issue_id }),
+    body: JSON.stringify(body),
   });
   const data = await response.json();
-  if (data.outcome === "challenge_required" && data.challenge) {
-    challengeToken = data.challenge.token;
-    challengeImage.src = data.challenge.image_data_uri;
-    challengeAnswer.value = "";
-    challengePanel.hidden = false;
-    challengeAnswer.focus();
-    return true;
-  }
-  challengeToken = null;
-  challengePanel.hidden = true;
-  renderResult(data);
-  return false;
+  if (response.ok) return data;
+  const detail = typeof data.detail === "string" ? data.detail : "HTTP " + response.status;
+  return { outcome: "upstream_error", message: detail };
 }
 
 function addCell(row, value) {
@@ -241,40 +209,75 @@ function renderRecords(records) {
   return table;
 }
 
-function renderResult(data) {
-  clearError();
-  resultBox.replaceChildren();
-  resultBox.hidden = false;
+function renderChallenge(box, issue, pan, challenge) {
+  const panel = document.createElement("div");
+  panel.className = "challenge-panel";
+  const hint = document.createElement("p");
+  hint.className = "text-light";
+  hint.textContent = challenge.hint || "Enter the characters shown in the image.";
+  const image = document.createElement("img");
+  image.alt = "Registrar CAPTCHA challenge";
+  image.src = challenge.image_data_uri;
+  const row = document.createElement("div");
+  row.className = "hstack";
+  const answer = document.createElement("input");
+  answer.type = "text";
+  answer.maxLength = 16;
+  answer.autocomplete = "off";
+  answer.placeholder = "CAPTCHA answer";
+  const submit = document.createElement("button");
+  submit.type = "button";
+  submit.className = "button";
+  submit.textContent = "Check";
+  const refresh = document.createElement("button");
+  refresh.type = "button";
+  refresh.className = "button outline";
+  refresh.textContent = "New image";
+  row.append(answer, submit, refresh);
+  panel.append(hint, image, row);
+  box.append(panel);
 
-  const heading = document.createElement("h3");
+  submit.addEventListener("click", () => {
+    if (!answer.value.trim()) return;
+    lookupIssue(box, issue, pan, challenge.token, answer.value.trim());
+  });
+  answer.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      submit.click();
+    }
+  });
+  refresh.addEventListener("click", () => askChallenge(box, issue, pan));
+}
+
+function renderResult(box, issue, data, pan) {
+  box.replaceChildren();
+
+  const title = document.createElement("h3");
+  title.textContent = issue.company_name + " — " + issue.provider_label + " — " + pan;
+  const heading = document.createElement("p");
   heading.className = "allotment-outcome";
   heading.dataset.outcome = data.outcome;
   heading.textContent = outcomeLabels[data.outcome] || data.outcome;
-  resultBox.append(heading);
+  box.append(title, heading);
 
   if (data.message) {
     const message = document.createElement("p");
     message.textContent = data.message;
-    resultBox.append(message);
-  }
-  if (data.issue) {
-    const issueLine = document.createElement("p");
-    issueLine.className = "text-light";
-    issueLine.textContent = data.issue.company_name + " — " + data.issue.provider_label;
-    resultBox.append(issueLine);
+    box.append(message);
   }
   if (typeof data.allocated_shares === "number") {
     const shares = document.createElement("p");
     shares.textContent = "Allocated shares: " + data.allocated_shares;
-    resultBox.append(shares);
+    box.append(shares);
   }
   const table = renderRecords(data.records);
-  if (table) resultBox.append(table);
+  if (table) box.append(table);
   if (data.retry_after_seconds) {
     const retry = document.createElement("p");
     retry.className = "text-light";
     retry.textContent = "Try again in about " + data.retry_after_seconds + " seconds.";
-    resultBox.append(retry);
+    box.append(retry);
   }
   if (data.candidates && data.candidates.length) {
     const list = document.createElement("ul");
@@ -283,7 +286,10 @@ function renderResult(data) {
       item.textContent = candidate.company_name + " — " + candidate.provider_label;
       list.append(item);
     }
-    resultBox.append(list);
+    box.append(list);
+  }
+  if (data.outcome === "challenge_required" && data.challenge) {
+    renderChallenge(box, issue, pan, data.challenge);
   }
   if (data.status_page_url) {
     const link = document.createElement("a");
@@ -291,66 +297,82 @@ function renderResult(data) {
     link.href = data.status_page_url;
     link.rel = "noopener noreferrer";
     link.textContent = "Open the registrar status page";
-    resultBox.append(link);
+    box.append(link);
+  }
+}
+
+function renderPending(box, issue, pan) {
+  box.replaceChildren();
+  const title = document.createElement("h3");
+  title.textContent = issue.company_name + " — " + issue.provider_label + " — " + pan;
+  const status = document.createElement("p");
+  status.className = "text-light";
+  status.textContent = "Checking…";
+  box.append(title, status);
+}
+
+async function askChallenge(box, issue, pan) {
+  renderPending(box, issue, pan);
+  try {
+    const data = await postJson("/v1/allotment/challenge", { issue_id: issue.issue_id });
+    renderResult(box, issue, data, pan);
+  } catch (error) {
+    renderResult(box, issue, { outcome: "upstream_error", message: "The CAPTCHA could not be loaded." }, pan);
+  }
+}
+
+async function lookupIssue(box, issue, pan, captchaToken = null, captchaAnswer = "") {
+  renderPending(box, issue, pan);
+  try {
+    // Without a token the server tries OCR first; it only answers
+    // challenge_required when a human has to read the image.
+    const data = await postJson("/v1/allotment/lookup", {
+      issue_id: issue.issue_id,
+      pan,
+      captcha_token: captchaToken,
+      captcha_answer: captchaAnswer,
+    });
+    if (data.outcome === "challenge_required" && issue.requires_challenge) {
+      await askChallenge(box, issue, pan);
+      return;
+    }
+    renderResult(box, issue, data, pan);
+  } catch (error) {
+    renderResult(box, issue, { outcome: "upstream_error", message: "The lookup request failed." }, pan);
   }
 }
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const issue = selectedIssue();
-  if (!issue) {
-    showError("Select an IPO first.");
+  const selected = [...chosen].map((id) => byId.get(id)).filter(Boolean);
+  if (!selected.length) {
+    showError("Select at least one IPO.");
     return;
   }
   if (!panInput.checkValidity()) {
     panInput.reportValidity();
     return;
   }
-  if (issue.requires_challenge && !challengeToken) {
-    lookupButton.disabled = true;
-    try {
-      await requestChallenge();
-    } finally {
-      lookupButton.disabled = false;
-    }
-    return;
-  }
   clearError();
+  const pans = [...new Set(panInput.value.toUpperCase().split(/[\s,]+/).filter(Boolean))];
+  resultsBox.replaceChildren();
   lookupButton.disabled = true;
   try {
-    const response = await fetch("/v1/allotment/lookup", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        issue_id: issue.issue_id,
-        pan: panInput.value.trim().toUpperCase(),
-        captcha_token: challengeToken,
-        captcha_answer: challengeAnswer.value.trim(),
-      }),
-    });
-    const data = await response.json();
-    if (data.outcome === "challenge_required") {
-      challengeToken = null;
-      challengePanel.hidden = true;
-      if (issue.requires_challenge) {
-        await requestChallenge();
-      } else {
-        renderResult(data);
-      }
-      return;
-    }
-    challengeToken = null;
-    challengePanel.hidden = true;
-    renderResult(data);
-  } catch (error) {
-    showError("The lookup request failed.");
+    // ponytail: every PAN x issue pair is looked up at once; add a small
+    // concurrency cap if registrars start rate limiting big selections.
+    await Promise.all(
+      pans.flatMap((pan) =>
+        selected.map((issue) => {
+          const box = document.createElement("section");
+          box.className = "allotment-result";
+          resultsBox.append(box);
+          return lookupIssue(box, issue, pan);
+        }),
+      ),
+    );
   } finally {
     lookupButton.disabled = false;
   }
-});
-
-challengeRefresh.addEventListener("click", () => {
-  requestChallenge();
 });
 
 select.addEventListener("change", updateSelection);
