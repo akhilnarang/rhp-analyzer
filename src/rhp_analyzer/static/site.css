@@ -385,6 +385,12 @@ body > main {
   color: var(--danger, #b42318);
 }
 
+/* Oat styles [role="alert"] with display: flex inside a layer, which
+   outranks its own layered [hidden] rule. Hide the box until it is used. */
+.allotment-error[hidden] {
+  display: none;
+}
+
 .allotment-result {
   display: grid;
   gap: var(--space-3);
