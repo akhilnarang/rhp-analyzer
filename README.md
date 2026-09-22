@@ -180,6 +180,42 @@ curl --fail http://localhost:8000/v1/analyses/ANALYSIS_ID
 
 Only `POST /v1/analyze` uses bearer-token authentication. The report pages, analysis list, status API, result API, documentation, and health endpoint remain public. This lets a Telegram user open an analysis URL without a token.
 
+## Check IPO allotment status
+
+Open `http://127.0.0.1:8000/allotment`, or follow the **Allotment** link in the page navigation. Select an issue, enter the applicant PAN, and the service queries the registrar directly.
+
+The service aggregates active issues from four Indian registrars:
+
+- KFintech
+- MUFG Intime / Link Intime
+- Bigshare Services
+- Purva Sharegistry
+
+This subsystem is separate from the PDF analysis pipeline:
+
+- Lookups do not touch the SQLite database or report cache.
+- The applicant PAN is not stored and is never sent to a model.
+- Every allotment endpoint responds with `Cache-Control: no-store`.
+- Bigshare lookups require a visual CAPTCHA entered by the user; the service does not solve or bypass CAPTCHAs.
+
+The web UI uses these public API routes:
+
+```text
+GET  /v1/allotment/issues
+POST /v1/allotment/challenge
+POST /v1/allotment/lookup
+```
+
+Send the PAN in the JSON request body, never in a URL query parameter. Each lookup returns a normalized outcome: `allotted`, `not_allotted`, `not_found`, `pending`, `challenge_required`, `rate_limited`, `provider_unavailable`, `upstream_changed`, `upstream_error`, `ambiguous`, or `not_supported`.
+
+### Operational warning
+
+Registrars do not provide documented developer APIs. The adapters scrape undocumented public page contracts and can break when a registrar modifies its site. When a page change is detected, the API returns `upstream_changed` with a direct link to the registrar's official status page.
+
+Like the report views, the allotment endpoints are unauthenticated. Configure rate limiting at your reverse proxy before exposing the service publicly.
+
+For architecture, provider contracts, configuration, testing, and troubleshooting, see the [IPO Allotment Implementation Documentation](docs/allotment/README.md).
+
 ## Source limits
 
 The source must contain PDF or ZIP data. A ZIP must contain one content-verified offer document. The route also accepts the optional market fields shown above. The PDF extraction does not use this data. Only the final report uses it.

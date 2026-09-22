@@ -33,11 +33,18 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import HttpUrl
 
 from . import web
+from .allotment import AllotmentService, build_allotment_service
+from .allotment.base import InvalidPan
 from .api_schemas import (
+    AllotmentChallengeRequest,
+    AllotmentIssueListResponse,
+    AllotmentLookupRequest,
+    AllotmentLookupResult,
     AnalysisLinkResponse,
     AnalysisResponse,
     AnalysisStatusResponse,
     HealthResponse,
+    ProviderName,
 )
 from .archive import (
     ArchiveError,
@@ -437,6 +444,7 @@ def collect_market_data(**values: str | None) -> dict[str, str]:
 def create_app(
     settings: Settings | None = None,
     analysis_service: AnalysisService | None = None,
+    allotment_service: AllotmentService | None = None,
 ) -> FastAPI:
     app_settings = settings or get_settings()
 
@@ -452,6 +460,10 @@ def create_app(
             )
         else:
             app.state.analysis_service = analysis_service
+        if allotment_service is None:
+            app.state.allotment_service = build_allotment_service(app_settings)
+        else:
+            app.state.allotment_service = allotment_service
         for analysis_id in app.state.analysis_service.pending_job_ids():
             schedule_analysis(app, analysis_id)
         try:
@@ -470,6 +482,8 @@ def create_app(
     )
     if analysis_service is not None:
         app.state.analysis_service = analysis_service
+    if allotment_service is not None:
+        app.state.allotment_service = allotment_service
     app.state.analysis_tasks = {}
     app.state.settings = app_settings
     app.mount("/static", StaticFiles(directory=web.STATIC_DIRECTORY), name="static")
@@ -485,6 +499,21 @@ def create_app(
             request=request,
             name="analysis_list.html",
             context={"jobs": web.analysis_list_items(service.list_jobs())},
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/allotment", response_class=HTMLResponse, include_in_schema=False)
+    async def allotment_page(request: Request) -> HTMLResponse:
+        service: AllotmentService = request.app.state.allotment_service
+        return web.templates.TemplateResponse(
+            request=request,
+            name="allotment.html",
+            context={
+                "providers": [
+                    status.model_dump(mode="json")
+                    for status in service.provider_statuses()
+                ]
+            },
             headers={"Cache-Control": "no-store"},
         )
 
@@ -709,6 +738,62 @@ def create_app(
             },
             headers={"Cache-Control": cache_control},
         )
+
+    @app.get(
+        "/v1/allotment/issues",
+        response_model=AllotmentIssueListResponse,
+    )
+    async def list_allotment_issues(
+        request: Request,
+        response: Response,
+        query: str | None = None,
+        provider: ProviderName | None = None,
+    ) -> AllotmentIssueListResponse:
+        service: AllotmentService = request.app.state.allotment_service
+        issues, _errors = await service.list_issues(query=query, provider=provider)
+        response.headers["Cache-Control"] = "no-store"
+        return AllotmentIssueListResponse(
+            issues=issues,
+            providers=service.provider_statuses(),
+        )
+
+    @app.post(
+        "/v1/allotment/challenge",
+        response_model=AllotmentLookupResult,
+    )
+    async def start_allotment_challenge(
+        request: Request,
+        response: Response,
+        payload: AllotmentChallengeRequest,
+    ) -> AllotmentLookupResult:
+        service: AllotmentService = request.app.state.allotment_service
+        response.headers["Cache-Control"] = "no-store"
+        return await service.challenge(
+            issue_id=payload.issue_id,
+            query=payload.query,
+        )
+
+    @app.post(
+        "/v1/allotment/lookup",
+        response_model=AllotmentLookupResult,
+    )
+    async def allotment_lookup(
+        request: Request,
+        response: Response,
+        payload: AllotmentLookupRequest,
+    ) -> AllotmentLookupResult:
+        service: AllotmentService = request.app.state.allotment_service
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            return await service.lookup(
+                pan=payload.pan,
+                issue_id=payload.issue_id,
+                query=payload.query,
+                captcha_token=payload.captcha_token,
+                captcha_answer=payload.captcha_answer,
+            )
+        except InvalidPan as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return app
 

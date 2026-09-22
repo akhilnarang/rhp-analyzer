@@ -1,0 +1,345 @@
+{% extends "base.html" %}
+{% block title %}IPO allotment status{% endblock %}
+{% block nav_detail %}<span class="nav-detail">Allotment status</span>{% endblock %}
+{% block content %}
+<section class="page-shell">
+  <h1>IPO allotment status</h1>
+  <p class="text-light">
+    Select the issue, enter the applicant PAN, and the service asks the
+    registrar directly. The PAN is never stored or sent to a model.
+  </p>
+
+  <form id="allotment-form" class="allotment-form" autocomplete="off">
+    <div class="form-group">
+      <label for="company-filter">Company or IPO</label>
+      <input
+        id="company-filter"
+        type="search"
+        placeholder="Filter by company or issuer name"
+      >
+      <select id="issue-select" name="issue_id" required size="8"></select>
+      <small class="text-light" id="issue-meta"></small>
+    </div>
+    <div class="form-group">
+      <label for="pan-input">Applicant PAN</label>
+      <input
+        id="pan-input"
+        name="pan"
+        type="text"
+        required
+        maxlength="10"
+        minlength="10"
+        pattern="[A-Za-z]{5}[0-9]{4}[A-Za-z]{1}"
+        placeholder="ABCDE1234F"
+        autocapitalize="characters"
+        spellcheck="false"
+      >
+    </div>
+    <div id="challenge-panel" class="challenge-panel" hidden>
+      <p id="challenge-message" class="text-light">
+        Enter the characters shown in the image.
+      </p>
+      <img id="challenge-image" alt="Registrar CAPTCHA challenge">
+      <div class="hstack">
+        <input
+          id="challenge-answer"
+          type="text"
+          maxlength="16"
+          autocomplete="off"
+          placeholder="CAPTCHA answer"
+        >
+        <button id="challenge-refresh" class="button outline" type="button">
+          New image
+        </button>
+      </div>
+    </div>
+    <nav class="hstack">
+      <button id="lookup-button" class="button" type="submit">Check status</button>
+      <a class="button ghost" href="{{ url_for('home') }}">Back</a>
+    </nav>
+  </form>
+
+  <p id="allotment-error" class="allotment-error" role="alert" hidden></p>
+  <section id="allotment-result" class="allotment-result" hidden></section>
+
+  <section class="allotment-providers">
+    <h3>Registrars</h3>
+    <ul>
+      {% for provider in providers %}
+      <li>
+        <a href="{{ provider.status_page_url }}" rel="noopener noreferrer">
+          {{ provider.label }}
+        </a>
+        {% if provider.requires_challenge %}<span class="badge">needs CAPTCHA</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+const form = document.getElementById("allotment-form");
+const filter = document.getElementById("company-filter");
+const select = document.getElementById("issue-select");
+const meta = document.getElementById("issue-meta");
+const panInput = document.getElementById("pan-input");
+const errorBox = document.getElementById("allotment-error");
+const resultBox = document.getElementById("allotment-result");
+const challengePanel = document.getElementById("challenge-panel");
+const challengeImage = document.getElementById("challenge-image");
+const challengeAnswer = document.getElementById("challenge-answer");
+const challengeRefresh = document.getElementById("challenge-refresh");
+const lookupButton = document.getElementById("lookup-button");
+
+let issues = [];
+let byId = new Map();
+let challengeToken = null;
+
+const outcomeLabels = {
+  allotted: "Allotted",
+  not_allotted: "Not allotted",
+  not_found: "No application found",
+  pending: "Pending",
+  challenge_required: "CAPTCHA required",
+  rate_limited: "Registrar is busy",
+  provider_unavailable: "Registrar unavailable",
+  upstream_changed: "Registrar page changed",
+  upstream_error: "Lookup error",
+  ambiguous: "Several issues match",
+  not_supported: "Not supported",
+};
+
+function clearError() {
+  errorBox.hidden = true;
+  errorBox.textContent = "";
+}
+
+function showError(message) {
+  errorBox.textContent = message;
+  errorBox.hidden = false;
+}
+
+function selectedIssue() {
+  return byId.get(select.value) || null;
+}
+
+function renderOptions() {
+  const needle = filter.value.trim().toLowerCase();
+  select.replaceChildren();
+  for (const issue of issues) {
+    const haystack = (issue.company_name + " " + issue.provider_label).toLowerCase();
+    if (needle && !haystack.includes(needle)) continue;
+    const option = document.createElement("option");
+    option.value = issue.issue_id;
+    const closeLabel = issue.close_date ? " — closes " + issue.close_date : "";
+    option.textContent = issue.company_name + closeLabel + " — " + issue.provider_label;
+    select.append(option);
+  }
+  updateSelection();
+}
+
+function updateSelection() {
+  challengeToken = null;
+  challengePanel.hidden = true;
+  const issue = selectedIssue();
+  meta.textContent = issue
+    ? issue.requires_challenge
+      ? "This registrar asks for a CAPTCHA before every lookup."
+      : issue.close_date
+        ? "Closes " + issue.close_date + "; registrar: " + issue.provider_label + "."
+        : "Registrar: " + issue.provider_label + "."
+    : "No issue selected.";
+}
+
+async function loadIssues() {
+  try {
+    const response = await fetch("/v1/allotment/issues", {
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    const data = await response.json();
+    issues = data.issues || [];
+    byId = new Map(issues.map((issue) => [issue.issue_id, issue]));
+    renderOptions();
+    if (!issues.length) {
+      showError("No registrar catalogues are available right now.");
+    }
+  } catch (error) {
+    showError("The issue catalogue could not be loaded.");
+  }
+}
+
+async function requestChallenge() {
+  const issue = selectedIssue();
+  if (!issue) return;
+  clearError();
+  const response = await fetch("/v1/allotment/challenge", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ issue_id: issue.issue_id }),
+  });
+  const data = await response.json();
+  if (data.outcome === "challenge_required" && data.challenge) {
+    challengeToken = data.challenge.token;
+    challengeImage.src = data.challenge.image_data_uri;
+    challengeAnswer.value = "";
+    challengePanel.hidden = false;
+    challengeAnswer.focus();
+    return true;
+  }
+  challengeToken = null;
+  challengePanel.hidden = true;
+  renderResult(data);
+  return false;
+}
+
+function addCell(row, value) {
+  const cell = document.createElement("td");
+  cell.textContent = value === null || value === undefined ? "" : String(value);
+  row.append(cell);
+}
+
+function renderRecords(records) {
+  if (!records || !records.length) return null;
+  const table = document.createElement("table");
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const label of ["Application", "Name", "DP ID", "Applied", "Allotted", "Remarks"]) {
+    const cell = document.createElement("th");
+    cell.textContent = label;
+    headRow.append(cell);
+  }
+  head.append(headRow);
+  const body = document.createElement("tbody");
+  for (const record of records) {
+    const row = document.createElement("tr");
+    addCell(row, record.application_no);
+    addCell(row, record.name);
+    addCell(row, record.dp_id);
+    addCell(row, record.applied_shares);
+    addCell(row, record.allotted_shares);
+    addCell(row, record.remarks);
+    body.append(row);
+  }
+  table.append(head, body);
+  return table;
+}
+
+function renderResult(data) {
+  clearError();
+  resultBox.replaceChildren();
+  resultBox.hidden = false;
+
+  const heading = document.createElement("h3");
+  heading.className = "allotment-outcome";
+  heading.dataset.outcome = data.outcome;
+  heading.textContent = outcomeLabels[data.outcome] || data.outcome;
+  resultBox.append(heading);
+
+  if (data.message) {
+    const message = document.createElement("p");
+    message.textContent = data.message;
+    resultBox.append(message);
+  }
+  if (data.issue) {
+    const issueLine = document.createElement("p");
+    issueLine.className = "text-light";
+    issueLine.textContent = data.issue.company_name + " — " + data.issue.provider_label;
+    resultBox.append(issueLine);
+  }
+  if (typeof data.allocated_shares === "number") {
+    const shares = document.createElement("p");
+    shares.textContent = "Allocated shares: " + data.allocated_shares;
+    resultBox.append(shares);
+  }
+  const table = renderRecords(data.records);
+  if (table) resultBox.append(table);
+  if (data.retry_after_seconds) {
+    const retry = document.createElement("p");
+    retry.className = "text-light";
+    retry.textContent = "Try again in about " + data.retry_after_seconds + " seconds.";
+    resultBox.append(retry);
+  }
+  if (data.candidates && data.candidates.length) {
+    const list = document.createElement("ul");
+    for (const candidate of data.candidates) {
+      const item = document.createElement("li");
+      item.textContent = candidate.company_name + " — " + candidate.provider_label;
+      list.append(item);
+    }
+    resultBox.append(list);
+  }
+  if (data.status_page_url) {
+    const link = document.createElement("a");
+    link.className = "button outline small";
+    link.href = data.status_page_url;
+    link.rel = "noopener noreferrer";
+    link.textContent = "Open the registrar status page";
+    resultBox.append(link);
+  }
+}
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const issue = selectedIssue();
+  if (!issue) {
+    showError("Select an IPO first.");
+    return;
+  }
+  if (!panInput.checkValidity()) {
+    panInput.reportValidity();
+    return;
+  }
+  if (issue.requires_challenge && !challengeToken) {
+    lookupButton.disabled = true;
+    try {
+      await requestChallenge();
+    } finally {
+      lookupButton.disabled = false;
+    }
+    return;
+  }
+  clearError();
+  lookupButton.disabled = true;
+  try {
+    const response = await fetch("/v1/allotment/lookup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        issue_id: issue.issue_id,
+        pan: panInput.value.trim().toUpperCase(),
+        captcha_token: challengeToken,
+        captcha_answer: challengeAnswer.value.trim(),
+      }),
+    });
+    const data = await response.json();
+    if (data.outcome === "challenge_required") {
+      challengeToken = null;
+      challengePanel.hidden = true;
+      if (issue.requires_challenge) {
+        await requestChallenge();
+      } else {
+        renderResult(data);
+      }
+      return;
+    }
+    challengeToken = null;
+    challengePanel.hidden = true;
+    renderResult(data);
+  } catch (error) {
+    showError("The lookup request failed.");
+  } finally {
+    lookupButton.disabled = false;
+  }
+});
+
+challengeRefresh.addEventListener("click", () => {
+  requestChallenge();
+});
+
+select.addEventListener("change", updateSelection);
+filter.addEventListener("input", renderOptions);
+loadIssues();
+</script>
+{% endblock %}

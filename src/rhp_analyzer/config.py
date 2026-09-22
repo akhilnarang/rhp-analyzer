@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     rhp_section_concurrency: int = Field(default=4, ge=1, le=10)
     rhp_job_concurrency: int = Field(default=1, ge=1, le=10)
     rhp_api_tokens: SecretStr | None = None
+    ipo_allotment_timeout_seconds: float = Field(default=15.0, gt=0, le=60)
+    ipo_allotment_catalogue_ttl_seconds: int = Field(default=300, ge=0, le=3600)
 
     def api_tokens(self) -> set[str]:
         if self.rhp_api_tokens is None:
