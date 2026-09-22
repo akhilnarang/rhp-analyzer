@@ -4,6 +4,7 @@ import asyncio
 import json
 from collections import Counter
 from unittest import TestCase
+from unittest.mock import patch
 
 import httpx
 from httpx import ASGITransport, AsyncClient
@@ -262,6 +263,33 @@ class AllotmentTests(TestCase):
             self.assertEqual(lookup.json()["outcome"], "allotted")
             self.assertEqual(stub.bigshare_lookup_body["CaptchaAnswer"], "CD34")
             self.assertEqual(pending.json()["outcome"], "pending")
+
+        asyncio.run(scenario())
+
+    def test_captcha_ocr_submits_read_digits_and_falls_back_on_a_miss(self) -> None:
+        async def scenario() -> None:
+            stub = RegistrarStub()
+            with patch(
+                "rhp_analyzer.allotment.bigshare.read_captcha_digits",
+                side_effect=["654321", None],
+            ):
+                async with AsyncClient(
+                    transport=ASGITransport(app=make_app(stub)),
+                    base_url="http://test",
+                ) as client:
+                    solved = await client.post(
+                        "/v1/allotment/lookup",
+                        json={"issue_id": "bigshare:303", "pan": PAN},
+                    )
+                    blocked = await client.post(
+                        "/v1/allotment/lookup",
+                        json={"issue_id": "bigshare:303", "pan": PAN},
+                    )
+
+            self.assertEqual(solved.json()["outcome"], "allotted")
+            self.assertEqual(stub.bigshare_lookup_body["CaptchaToken"], "captcha-token")
+            self.assertEqual(stub.bigshare_lookup_body["CaptchaAnswer"], "654321")
+            self.assertEqual(blocked.json()["outcome"], "challenge_required")
 
         asyncio.run(scenario())
 

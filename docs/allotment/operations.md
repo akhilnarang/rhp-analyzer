@@ -13,6 +13,17 @@ Allotment settings are defined in `src/rhp_analyzer/config.py` and configured vi
 | `IPO_ALLOTMENT_TIMEOUT_SECONDS` | Float | `15.0` | `0 < x <= 60` | HTTP request timeout for individual registrar queries. Connection timeout is capped at `min(timeout, 5.0)`. |
 | `IPO_ALLOTMENT_CATALOGUE_TTL_SECONDS` | Integer | `300` | `0 <= x <= 3600` | Duration in seconds to retain the combined in-memory registrar issue catalogue before refreshing. |
 
+### CAPTCHA auto-solving
+
+Bigshare lookups always try to read the CAPTCHA with OCR first. Bigshare permits this automation for personal use. Install the OCR stack to use it:
+
+```bash
+sudo apt install tesseract-ocr
+uv sync --group captcha
+```
+
+The reader accepts an answer only when it reads exactly six digits. Without Tesseract, or on any uncertain read, the lookup returns `challenge_required` and the human flow still works.
+
 Example `.env` configuration:
 
 ```dotenv

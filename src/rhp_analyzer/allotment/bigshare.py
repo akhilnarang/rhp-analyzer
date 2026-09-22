@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 from typing import Any
 
@@ -234,6 +236,43 @@ def _first_text(data: dict[str, Any], keys: tuple[str, ...]) -> str | None:
     return None
 
 
+def read_captcha_digits(image_bytes: bytes) -> str | None:
+    """Read the CAPTCHA digits with Tesseract.
+
+    Bigshare permits automation for personal use. Tesseract and Pillow are
+    optional: any missing dependency, unreadable image, or uncertain read
+    returns None so the caller falls back to the human CAPTCHA flow.
+    """
+
+    try:
+        import io
+
+        import pytesseract
+        from PIL import Image
+
+        image = Image.open(io.BytesIO(image_bytes)).convert("L")
+        text = pytesseract.image_to_string(
+            image,
+            config="--psm 7 -c tessedit_char_whitelist=0123456789",
+        )
+    except Exception:  # noqa: BLE001 - OCR is best effort only
+        return None
+    digits = "".join(character for character in text if character.isdigit())
+    return digits if len(digits) == 6 else None
+
+
+def captcha_image_bytes(challenge: AllotmentChallenge) -> bytes | None:
+    prefix = "base64,"
+    payload = challenge.image_data_uri
+    index = payload.find(prefix)
+    if index == -1:
+        return None
+    try:
+        return base64.b64decode(payload[index + len(prefix) :], validate=True)
+    except ValueError, binascii.Error:
+        return None
+
+
 class BigshareProvider(AllotmentProvider):
     name = ProviderName.BIGSHARE
     label = "Bigshare"
@@ -264,6 +303,24 @@ class BigshareProvider(AllotmentProvider):
                 client, "GET", _CAPTCHA_URL, retry_transient=True
             )
         return parse_challenge(self._json(response))
+
+    async def auto_solve_challenge(
+        self, issue: AllotmentIssue
+    ) -> tuple[str, str] | None:
+        """Fetch a challenge and read its digits with Tesseract.
+
+        Returns the token and answer, or None when OCR is unavailable or
+        could not read six digits. Local experiments only.
+        """
+
+        challenge = await self.start_challenge(issue)
+        image = captcha_image_bytes(challenge)
+        if image is None:
+            return None
+        digits = read_captcha_digits(image)
+        if digits is None:
+            return None
+        return challenge.token, digits
 
     async def _lookup(
         self,

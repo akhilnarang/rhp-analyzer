@@ -192,6 +192,10 @@ class AllotmentService:
                 issue=issue,
             )
         if provider.requires_challenge and not (captcha_token and captcha_answer):
+            captcha_token, captcha_answer = await self._auto_solved_challenge(
+                provider, issue
+            )
+        if provider.requires_challenge and not (captcha_token and captcha_answer):
             return AllotmentLookupResult(
                 outcome=AllotmentOutcome.CHALLENGE_REQUIRED,
                 provider=issue.provider,
@@ -205,6 +209,19 @@ class AllotmentService:
             captcha_token=captcha_token,
             captcha_answer=captcha_answer,
         )
+
+    async def _auto_solved_challenge(
+        self, provider: AllotmentProvider, issue: AllotmentIssue
+    ) -> tuple[str | None, str | None]:
+        """Solve a CAPTCHA with OCR when possible. Returns (None, None) on any miss."""
+
+        try:
+            solved = await provider.auto_solve_challenge(issue)
+        except Exception:  # noqa: BLE001 - fall back to the human flow
+            return None, None
+        if solved is None:
+            return None, None
+        return solved
 
     async def challenge(
         self,

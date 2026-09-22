@@ -36,3 +36,7 @@ dev = [
     "pytest>=9.1.1",
     "ruff>=0.16.2",
 ]
+captcha = [
+    "pytesseract>=0.3.13",
+    "pillow>=11.0.0",
+]

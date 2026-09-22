@@ -200,6 +200,13 @@ class AllotmentProvider(abc.ABC):
     async def start_challenge(self, issue: AllotmentIssue) -> AllotmentChallenge:
         raise ChallengeNotSupported(f"{self.label} does not issue a CAPTCHA challenge.")
 
+    async def auto_solve_challenge(
+        self, issue: AllotmentIssue
+    ) -> tuple[str, str] | None:
+        """Return a solved (token, answer), or None when unsupported."""
+        del issue
+        return None
+
     async def lookup(
         self,
         issue: AllotmentIssue,
