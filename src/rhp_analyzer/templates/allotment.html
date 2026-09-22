@@ -6,7 +6,8 @@
   <h1>IPO allotment status</h1>
   <p class="text-light">
     Select one or more issues (Ctrl/Cmd-click on desktop), enter one PAN or several separated by commas, and the service asks the
-    registrar directly. PANs are never stored or sent to a model.
+    registrar directly. PANs are never stored on the server or sent to a model; this browser remembers
+    the list you enter. Clear the field to forget it.
   </p>
 
   <form id="allotment-form" class="allotment-form" autocomplete="off">
@@ -36,6 +37,16 @@
         autocapitalize="characters"
         spellcheck="false"
       >
+    </div>
+    <div class="form-group">
+      <label for="recheck-select">Recheck unfinished results</label>
+      <select id="recheck-select">
+        <option value="0">Off</option>
+        <option value="5">Every 5 minutes</option>
+        <option value="15">Every 15 minutes</option>
+        <option value="30">Every 30 minutes</option>
+      </select>
+      <small class="text-light">Only while this tab stays open. Allotted, not allotted and not found results are not rechecked.</small>
     </div>
     <nav class="hstack">
       <button id="lookup-button" class="button" type="submit">Check status</button>
@@ -72,6 +83,11 @@ const panInput = document.getElementById("pan-input");
 const errorBox = document.getElementById("allotment-error");
 const resultsBox = document.getElementById("allotment-results");
 const lookupButton = document.getElementById("lookup-button");
+const recheckSelect = document.getElementById("recheck-select");
+const PAN_STORAGE_KEY = "allotment-pans";
+// Outcomes worth no automatic retry; challenge_required waits for a human.
+const FINAL_OUTCOMES = new Set(["allotted", "not_allotted", "not_found", "challenge_required"]);
+let recheckTimer = null;
 
 let issues = [];
 let byId = new Map();
@@ -252,6 +268,7 @@ function renderChallenge(box, issue, pan, challenge) {
 
 function renderResult(box, issue, data, pan) {
   box.replaceChildren();
+  box.dataset.outcome = data.outcome;
 
   const title = document.createElement("h3");
   title.textContent = issue.company_name + " — " + issue.provider_label + " — " + pan;
@@ -365,6 +382,8 @@ form.addEventListener("submit", async (event) => {
         selected.map((issue) => {
           const box = document.createElement("section");
           box.className = "allotment-result";
+          box.dataset.issueId = issue.issue_id;
+          box.dataset.pan = pan;
           resultsBox.append(box);
           return lookupIssue(box, issue, pan);
         }),
@@ -373,7 +392,37 @@ form.addEventListener("submit", async (event) => {
   } finally {
     lookupButton.disabled = false;
   }
+  scheduleRecheck();
 });
+
+function scheduleRecheck() {
+  clearTimeout(recheckTimer);
+  const minutes = Number(recheckSelect.value);
+  if (minutes) recheckTimer = setTimeout(recheck, minutes * 60000);
+}
+
+async function recheck() {
+  const open = [...resultsBox.children].filter(
+    (box) => !FINAL_OUTCOMES.has(box.dataset.outcome) && byId.has(box.dataset.issueId),
+  );
+  if (!open.length) return;
+  await Promise.all(
+    open.map((box) => lookupIssue(box, byId.get(box.dataset.issueId), box.dataset.pan)),
+  );
+  scheduleRecheck();
+}
+
+try {
+  panInput.value = localStorage.getItem(PAN_STORAGE_KEY) || "";
+} catch (error) {}
+panInput.addEventListener("input", () => {
+  try {
+    const value = panInput.value.trim();
+    if (value) localStorage.setItem(PAN_STORAGE_KEY, value);
+    else localStorage.removeItem(PAN_STORAGE_KEY);
+  } catch (error) {}
+});
+recheckSelect.addEventListener("change", scheduleRecheck);
 
 select.addEventListener("change", updateSelection);
 filter.addEventListener("input", renderOptions);
